@@ -438,6 +438,7 @@ class Config:
 
     # === 数据源 API Token ===
     tushare_token: Optional[str] = None
+    tushare_api_url: Optional[str] = None
     tickflow_api_key: Optional[str] = None
     longbridge_app_key: Optional[str] = None
     longbridge_app_secret: Optional[str] = None
@@ -679,6 +680,15 @@ class Config:
     enable_chip_distribution: bool = True
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
+
+    # === Brain 工作记忆配置 ===
+    brain_enabled: bool = False  # 是否启用 Brain 工作记忆（默认关闭，opt-in）
+    brain_data_dir: str = "data/brain"  # Brain 状态持久化目录
+
+    # === Guard 校验层配置 ===
+    guard_enabled: bool = True  # 是否启用 Guard 校验层（默认开启）
+    guard_strict_mode: bool = False  # 严格模式：出现 critical 问题时阻断报告生成
+
     # 实时行情数据源优先级（逗号分隔）
     # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
@@ -1111,6 +1121,7 @@ class Config:
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
             tushare_token=os.getenv('TUSHARE_TOKEN'),
+            tushare_api_url=os.getenv('TUSHARE_API_URL'),
             tickflow_api_key=os.getenv('TICKFLOW_API_KEY'),
             longbridge_app_key=os.getenv('LONGBRIDGE_APP_KEY') or None,
             longbridge_app_secret=os.getenv('LONGBRIDGE_APP_SECRET') or None,
@@ -1431,7 +1442,13 @@ class Config:
                 field_name='PORTFOLIO_RISK_LOOKBACK_DAYS',
                 minimum=1,
             ),
-            portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true'
+            portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true',
+            # Brain 工作记忆
+            brain_enabled=os.getenv('BRAIN_ENABLED', 'false').lower() == 'true',
+            brain_data_dir=os.getenv('BRAIN_DATA_DIR', 'data/brain'),
+            # Guard 校验层
+            guard_enabled=os.getenv('GUARD_ENABLED', 'true').lower() != 'false',
+            guard_strict_mode=os.getenv('GUARD_STRICT_MODE', 'false').lower() == 'true',
         )
     
     @classmethod

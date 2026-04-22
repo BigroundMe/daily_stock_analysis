@@ -165,21 +165,22 @@ class TushareFetcher(BaseFetcher):
             return
 
         try:
-            self._api = self._build_api_client(config.tushare_token)
+            api_url = config.tushare_api_url or "http://api.tushare.pro"
+            self._api = self._build_api_client(config.tushare_token, api_url=api_url)
             logger.info("Tushare API 初始化成功")
         except Exception as e:
             logger.error(f"Tushare API 初始化失败: {e}")
             self._api = None
 
-    def _build_api_client(self, token: str) -> _TushareHttpClient:
+    def _build_api_client(self, token: str, api_url: str = "http://api.tushare.pro") -> _TushareHttpClient:
         """
         Build a lightweight Tushare Pro client over direct HTTP requests.
 
         The project already normalizes all Pro calls through the same request
         contract, so we do not need the official tushare SDK during runtime.
         """
-        client = _TushareHttpClient(token=token)
-        logger.debug("Tushare API client configured for direct HTTP calls")
+        client = _TushareHttpClient(token=token, api_url=api_url)
+        logger.debug("Tushare API client configured for direct HTTP calls (url=%s)", api_url)
         return client
 
     def _determine_priority(self) -> int:
