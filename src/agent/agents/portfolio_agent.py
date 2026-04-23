@@ -111,6 +111,18 @@ class PortfolioAgent(BaseAgent):
             for code in stock_list:
                 parts.append(f"- {code}")
 
+        # 注入用户真实持仓（若有）
+        portfolio_holdings = ctx.data.get("portfolio_holdings")
+        if portfolio_holdings:
+            parts.append("\n### Current Portfolio Holdings:")
+            for h in portfolio_holdings:
+                parts.append(
+                    f"- **{h.get('symbol', '?')}**: "
+                    f"qty={h.get('quantity', 0)}, "
+                    f"avg_cost={h.get('avg_cost', 0):.4f}, "
+                    f"pnl={h.get('unrealized_pnl_base', 0):.2f}"
+                )
+
         # Include risk flags if any
         if ctx.risk_flags:
             parts.append("\n### Risk Flags from Individual Analysis:")

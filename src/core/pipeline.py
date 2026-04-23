@@ -101,6 +101,16 @@ class StockAnalysisPipeline:
         self.analyzer = GeminiAnalyzer(config=self.config)
         self.notifier = NotificationService(source_message=source_message)
         self._single_stock_notify_lock = threading.Lock()
+
+        # 初始化持仓服务（可选，失败不阻断分析）
+        self._portfolio_service = None
+        if getattr(self.config, 'portfolio_enabled', False):
+            try:
+                from src.services.portfolio_service import PortfolioService
+                self._portfolio_service = PortfolioService()
+                logger.info("持仓服务已启用，分析将注入持仓上下文")
+            except Exception as exc:
+                logger.warning("持仓服务初始化失败，将跳过持仓上下文注入: %s", exc)
         
         # 初始化搜索服务（可选，初始化失败不应阻断主分析流程）
         try:
@@ -443,7 +453,17 @@ class StockAnalysisPipeline:
                     'today': {},
                     'yesterday': {}
                 }
-            
+
+            # Step 5.5: 查询当前股票的持仓信息（可选，失败静默降级）
+            portfolio_positions = None
+            if self._portfolio_service is not None:
+                try:
+                    portfolio_positions = self._portfolio_service.get_positions_by_symbol(code)
+                    if portfolio_positions:
+                        logger.info(f"{stock_name}({code}) 找到 {len(portfolio_positions)} 条持仓记录")
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 持仓查询失败: {e}")
+
             # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
             enhanced_context = self._enhance_context(
                 context, 
@@ -452,6 +472,7 @@ class StockAnalysisPipeline:
                 trend_result,
                 stock_name,  # 传入股票名称
                 fundamental_context,
+                portfolio_positions,
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -526,12 +547,13 @@ class StockAnalysisPipeline:
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
         stock_name: str = "",
-        fundamental_context: Optional[Dict[str, Any]] = None
+        fundamental_context: Optional[Dict[str, Any]] = None,
+        portfolio_positions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         增强分析上下文
         
-        将实时行情、筹码分布、趋势分析结果、股票名称添加到上下文中
+        将实时行情、筹码分布、趋势分析结果、股票名称、持仓信息添加到上下文中
         
         Args:
             context: 原始上下文
@@ -539,6 +561,8 @@ class StockAnalysisPipeline:
             chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
+            fundamental_context: 基本面上下文
+            portfolio_positions: 用户持仓列表
             
         Returns:
             增强后的上下文
@@ -683,6 +707,24 @@ class StockAnalysisPipeline:
             )
         )
 
+        # 注入持仓上下文（供 LLM 结合持仓给出更精准建议）
+        if portfolio_positions:
+            total_quantity = sum(p.get("quantity", 0) for p in portfolio_positions)
+            total_cost = sum(p.get("total_cost", 0) for p in portfolio_positions)
+            total_mv = sum(p.get("market_value_base", 0) for p in portfolio_positions)
+            total_pnl = sum(p.get("unrealized_pnl_base", 0) for p in portfolio_positions)
+            avg_cost = total_cost / total_quantity if total_quantity > 0 else 0
+            enhanced["portfolio"] = {
+                "held": True,
+                "total_quantity": total_quantity,
+                "avg_cost": round(avg_cost, 4),
+                "total_cost": round(total_cost, 2),
+                "market_value": round(total_mv, 2),
+                "unrealized_pnl": round(total_pnl, 2),
+                "pnl_pct": round(total_pnl / total_cost * 100, 2) if total_cost > 0 else 0,
+                "accounts": len(portfolio_positions),
+            }
+
         return enhanced
 
     def _attach_belong_boards_to_fundamental_context(
@@ -772,6 +814,16 @@ class StockAnalysisPipeline:
                 initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
             if trend_result:
                 initial_context["trend_result"] = self._safe_to_dict(trend_result)
+
+            # Agent path: 注入持仓上下文（若启用）
+            if self._portfolio_service is not None:
+                try:
+                    positions = self._portfolio_service.get_positions_by_symbol(code)
+                    if positions:
+                        initial_context["portfolio_holdings"] = positions
+                        logger.info(f"[{code}] Agent mode: {len(positions)} portfolio positions injected")
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent mode: portfolio query failed: {e}")
 
             # Agent path: inject social sentiment as news_context so both
             # executor (_build_user_message) and orchestrator (ctx.set_data)

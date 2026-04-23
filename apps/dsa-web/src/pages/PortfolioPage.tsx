@@ -17,11 +17,12 @@ import type {
   PortfolioImportBrokerItem,
   PortfolioImportCommitResponse,
   PortfolioImportParseResponse,
-  PortfolioPositionItem,
   PortfolioRiskResponse,
   PortfolioSide,
-  PortfolioSnapshotResponse,
   PortfolioTradeListItem,
+  EnrichedPositionItem,
+  EnrichedSnapshotResponse,
+  TradeSuggestionItem,
 } from '../types/portfolio';
 
 const PIE_COLORS = ['#00d4ff', '#00ff88', '#ffaa00', '#ff7a45', '#7f8cff', '#ff4466'];
@@ -35,7 +36,7 @@ const FALLBACK_BROKERS: PortfolioImportBrokerItem[] = [
 type AccountOption = 'all' | number;
 type EventType = 'trade' | 'cash' | 'corporate';
 
-type FlatPosition = PortfolioPositionItem & {
+type FlatPosition = EnrichedPositionItem & {
   accountId: number;
   accountName: string;
 };
@@ -170,7 +171,7 @@ const PortfolioPage: React.FC = () => {
     baseCurrency: 'CNY',
   });
   const [costMethod, setCostMethod] = useState<PortfolioCostMethod>('fifo');
-  const [snapshot, setSnapshot] = useState<PortfolioSnapshotResponse | null>(null);
+  const [snapshot, setSnapshot] = useState<EnrichedSnapshotResponse | null>(null);
   const [risk, setRisk] = useState<PortfolioRiskResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [fxRefreshing, setFxRefreshing] = useState(false);
@@ -178,6 +179,9 @@ const PortfolioPage: React.FC = () => {
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [riskWarning, setRiskWarning] = useState<string | null>(null);
   const [writeWarning, setWriteWarning] = useState<string | null>(null);
+  const [tradeSuggestions, setTradeSuggestions] = useState<TradeSuggestionItem[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [analyzingAll, setAnalyzingAll] = useState(false);
 
   const [brokers, setBrokers] = useState<PortfolioImportBrokerItem[]>([]);
   const [selectedBroker, setSelectedBroker] = useState('huatai');
@@ -299,7 +303,7 @@ const PortfolioPage: React.FC = () => {
     setIsLoading(true);
     setRiskWarning(null);
     try {
-      const snapshotData = await portfolioApi.getSnapshot({
+      const snapshotData = await portfolioApi.getEnrichedSnapshot({
         accountId: queryAccountId,
         costMethod,
       });
@@ -325,6 +329,45 @@ const PortfolioPage: React.FC = () => {
       setIsLoading(false);
     }
   }, [queryAccountId, costMethod]);
+
+  const loadTradeSuggestions = useCallback(async () => {
+    setSuggestionsLoading(true);
+    try {
+      const data = await portfolioApi.getTradeSuggestions({
+        accountId: queryAccountId,
+        costMethod,
+      });
+      setTradeSuggestions(data.suggestions || []);
+    } catch {
+      setTradeSuggestions([]);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  }, [queryAccountId, costMethod]);
+
+  const handleAnalyzeAll = useCallback(async () => {
+    if (!snapshot || analyzingAll) return;
+    const symbols = new Set<string>();
+    for (const acct of snapshot.accounts || []) {
+      for (const pos of acct.positions || []) {
+        symbols.add(pos.symbol);
+      }
+    }
+    if (symbols.size === 0) return;
+    setAnalyzingAll(true);
+    try {
+      const mod = await import('../api/analysis');
+      await mod.analysisApi.analyzeAsync({
+        stockCodes: Array.from(symbols),
+        reportType: 'detailed',
+        notify: false,
+      });
+    } catch {
+      // 分析已提交到后台，忽略错误
+    } finally {
+      setAnalyzingAll(false);
+    }
+  }, [snapshot, analyzingAll]);
 
   const loadEventsPage = useCallback(async (page: number) => {
     setEventLoading(true);
@@ -950,7 +993,19 @@ const PortfolioPage: React.FC = () => {
         <Card className="xl:col-span-2" padding="md">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-foreground">持仓明细</h2>
-            <span className="text-xs text-secondary">共 {positionRows.length} 项</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-secondary">共 {positionRows.length} 项</span>
+              {positionRows.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-secondary !px-3 !py-1 !text-xs"
+                  onClick={() => void handleAnalyzeAll()}
+                  disabled={analyzingAll}
+                >
+                  {analyzingAll ? '分析中...' : '分析全部持仓'}
+                </button>
+              )}
+            </div>
           </div>
           {positionRows.length === 0 ? (
             <EmptyState
@@ -969,23 +1024,42 @@ const PortfolioPage: React.FC = () => {
                     <th className="text-right py-2 pr-2">均价</th>
                     <th className="text-right py-2 pr-2">现价</th>
                     <th className="text-right py-2 pr-2">市值</th>
-                    <th className="text-right py-2">未实现盈亏</th>
+                    <th className="text-right py-2 pr-2">未实现盈亏</th>
+                    <th className="text-center py-2 pr-2">评分</th>
+                    <th className="text-center py-2">建议</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {positionRows.map((row) => (
-                    <tr key={`${row.accountId}-${row.symbol}-${row.market}`} className="border-b border-white/5">
-                      <td className="py-2 pr-2 text-secondary">{row.accountName}</td>
-                      <td className="py-2 pr-2 font-mono text-foreground">{row.symbol}</td>
-                      <td className="py-2 pr-2 text-right">{row.quantity.toFixed(2)}</td>
-                      <td className="py-2 pr-2 text-right">{row.avgCost.toFixed(4)}</td>
-                      <td className="py-2 pr-2 text-right">{row.lastPrice.toFixed(4)}</td>
-                      <td className="py-2 pr-2 text-right">{formatMoney(row.marketValueBase, row.valuationCurrency)}</td>
-                      <td className={`py-2 text-right ${row.unrealizedPnlBase >= 0 ? 'text-success' : 'text-danger'}`}>
-                        {formatMoney(row.unrealizedPnlBase, row.valuationCurrency)}
-                      </td>
-                    </tr>
-                  ))}
+                  {positionRows.map((row) => {
+                    const analysis = row.latestAnalysis;
+                    const score = analysis?.sentimentScore;
+                    const scoreColor = score != null ? (score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger') : 'text-secondary';
+                    return (
+                      <tr key={`${row.accountId}-${row.symbol}-${row.market}`} className="border-b border-white/5">
+                        <td className="py-2 pr-2 text-secondary">{row.accountName}</td>
+                        <td className="py-2 pr-2 font-mono text-foreground">{row.symbol}</td>
+                        <td className="py-2 pr-2 text-right">{row.quantity.toFixed(2)}</td>
+                        <td className="py-2 pr-2 text-right">{row.avgCost.toFixed(4)}</td>
+                        <td className="py-2 pr-2 text-right">{row.lastPrice.toFixed(4)}</td>
+                        <td className="py-2 pr-2 text-right">{formatMoney(row.marketValueBase, row.valuationCurrency)}</td>
+                        <td className={`py-2 pr-2 text-right ${row.unrealizedPnlBase >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {formatMoney(row.unrealizedPnlBase, row.valuationCurrency)}
+                        </td>
+                        <td className={`py-2 pr-2 text-center font-semibold ${scoreColor}`}>
+                          {score != null ? score : '—'}
+                        </td>
+                        <td className="py-2 text-center">
+                          {analysis?.operationAdvice ? (
+                            <Badge variant={analysis.operationAdvice.includes('买') || analysis.operationAdvice.includes('加') ? 'success' : analysis.operationAdvice.includes('卖') || analysis.operationAdvice.includes('减') ? 'danger' : 'default'}>
+                              {analysis.operationAdvice}
+                            </Badge>
+                          ) : (
+                            <span className="text-secondary text-xs">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1022,6 +1096,54 @@ const PortfolioPage: React.FC = () => {
           </div>
         </Card>
       </section>
+
+      <Card padding="md">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-foreground">交易建议</h2>
+          <button
+            type="button"
+            className="btn-secondary !px-3 !py-1 !text-xs"
+            onClick={() => void loadTradeSuggestions()}
+            disabled={suggestionsLoading || !hasAccounts}
+          >
+            {suggestionsLoading ? '生成中...' : '生成建议'}
+          </button>
+        </div>
+        {tradeSuggestions.length === 0 ? (
+          <p className="text-xs text-secondary">点击"生成建议"，系统将结合最新分析结果与持仓情况生成交易建议。</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs text-secondary border-b border-white/10">
+                <tr>
+                  <th className="text-left py-2 pr-2">代码</th>
+                  <th className="text-center py-2 pr-2">操作</th>
+                  <th className="text-right py-2 pr-2">建议数量</th>
+                  <th className="text-right py-2 pr-2">参考价格</th>
+                  <th className="text-right py-2 pr-2">置信度</th>
+                  <th className="text-left py-2">理由</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tradeSuggestions.map((s) => {
+                  const actionColor = s.action === 'buy' || s.action === 'add' ? 'text-success' : s.action === 'sell' || s.action === 'reduce' ? 'text-danger' : 'text-secondary';
+                  const actionLabel: Record<string, string> = { buy: '买入', add: '加仓', hold: '持有', reduce: '减仓', sell: '卖出', watch: '观望' };
+                  return (
+                    <tr key={s.symbol} className="border-b border-white/5">
+                      <td className="py-2 pr-2 font-mono text-foreground">{s.symbol}</td>
+                      <td className={`py-2 pr-2 text-center font-semibold ${actionColor}`}>{actionLabel[s.action] ?? s.action}</td>
+                      <td className="py-2 pr-2 text-right">{s.quantitySuggestion ?? '—'}</td>
+                      <td className="py-2 pr-2 text-right">{s.priceReference?.toFixed(2) ?? '—'}</td>
+                      <td className="py-2 pr-2 text-right">{s.confidence ?? '—'}</td>
+                      <td className="py-2 text-xs text-secondary max-w-xs truncate">{s.reason}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {writeBlocked && hasAccounts ? (
         <InlineAlert

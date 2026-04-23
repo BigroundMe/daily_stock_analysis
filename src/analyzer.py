@@ -1696,6 +1696,29 @@ class GeminiAnalyzer:
 未搜索到该股票近期的相关新闻。请主要依据技术面数据进行分析。
 """
 
+        # 注入持仓上下文（让 LLM 知道用户持有该股）
+        portfolio = context.get('portfolio')
+        if portfolio and portfolio.get('held'):
+            pnl_pct = portfolio.get('pnl_pct', 0)
+            pnl_status = "盈利" if pnl_pct >= 0 else "亏损"
+            prompt += f"""
+---
+
+## 💼 用户持仓信息
+
+用户当前持有此股票，请在给出操作建议时结合持仓情况做出针对性建议。
+
+| 项目 | 数据 |
+|------|------|
+| 持仓数量 | {portfolio.get('total_quantity', 0)} 股 |
+| 平均成本 | {portfolio.get('avg_cost', 0)} 元 |
+| 持仓市值 | {portfolio.get('market_value', 0)} 元 |
+| 未实现盈亏 | {portfolio.get('unrealized_pnl', 0)} 元（{pnl_status} {abs(pnl_pct):.2f}%） |
+| 持仓账户数 | {portfolio.get('accounts', 1)} |
+
+> 请据此给出更精准的操作建议：加仓/减仓/止盈/止损/持有，并注明建议的目标价位和仓位比例。
+"""
+
         # 注入缺失数据警告
         if context.get('data_missing'):
             prompt += """

@@ -563,6 +563,266 @@ class PortfolioService:
             "accounts": accounts_payload,
         }
 
+    # ------------------------------------------------------------------
+    # Enriched snapshot (附带分析评分)
+    # ------------------------------------------------------------------
+    def get_enriched_snapshot(
+        self,
+        *,
+        account_id: Optional[int] = None,
+        as_of: Optional[date] = None,
+        cost_method: str = "fifo",
+    ) -> Dict[str, Any]:
+        """获取持仓快照并为每个 position 附加最近分析评分"""
+        snapshot = self.get_portfolio_snapshot(
+            account_id=account_id, as_of=as_of, cost_method=cost_method
+        )
+        # 收集所有 position 的 symbol
+        all_symbols: set = set()
+        for acct in snapshot.get("accounts", []):
+            for pos in acct.get("positions", []):
+                all_symbols.add(pos["symbol"])
+
+        if not all_symbols:
+            return snapshot
+
+        # 批量查询最近分析记录
+        try:
+            from src.repositories.analysis_repo import AnalysisRepository
+
+            analysis_repo = AnalysisRepository()
+            latest_map = analysis_repo.get_latest_by_codes(list(all_symbols), days=30)
+        except Exception as e:
+            logger.warning(f"查询分析记录失败，跳过 enrichment: {e}")
+            latest_map = {}
+
+        # 为每个 position 附加分析摘要
+        for acct in snapshot.get("accounts", []):
+            for pos in acct.get("positions", []):
+                symbol = pos["symbol"]
+                record = latest_map.get(symbol)
+                if record:
+                    pos["latest_analysis"] = {
+                        "sentiment_score": getattr(record, "sentiment_score", None),
+                        "operation_advice": getattr(record, "operation_advice", None),
+                        "trend_prediction": getattr(record, "trend_prediction", None),
+                        "ideal_buy": getattr(record, "ideal_buy", None),
+                        "stop_loss": getattr(record, "stop_loss", None),
+                        "take_profit": getattr(record, "take_profit", None),
+                        "analyzed_at": (
+                            record.created_at.isoformat()
+                            if getattr(record, "created_at", None)
+                            else None
+                        ),
+                    }
+                else:
+                    pos["latest_analysis"] = None
+
+        return snapshot
+
+    # ------------------------------------------------------------------
+    # Trade suggestions (交易建议)
+    # ------------------------------------------------------------------
+    def generate_trade_suggestions(
+        self,
+        *,
+        account_id: Optional[int] = None,
+        as_of: Optional[date] = None,
+        cost_method: str = "fifo",
+    ) -> Dict[str, Any]:
+        """基于分析结果 + 当前持仓生成交易建议"""
+        snapshot = self.get_portfolio_snapshot(
+            account_id=account_id, as_of=as_of, cost_method=cost_method
+        )
+
+        all_symbols: set = set()
+        position_map: Dict[str, Dict[str, Any]] = {}
+        for acct in snapshot.get("accounts", []):
+            for pos in acct.get("positions", []):
+                sym = pos["symbol"]
+                all_symbols.add(sym)
+                if sym not in position_map:
+                    position_map[sym] = {
+                        "quantity": 0.0,
+                        "total_cost": 0.0,
+                        "market_value": 0.0,
+                        "last_price": pos.get("last_price", 0),
+                    }
+                position_map[sym]["quantity"] += pos.get("quantity", 0)
+                position_map[sym]["total_cost"] += pos.get("total_cost", 0)
+                position_map[sym]["market_value"] += pos.get("market_value_base", 0)
+
+        if not all_symbols:
+            return {
+                "as_of": snapshot.get("as_of", ""),
+                "cost_method": snapshot.get("cost_method", cost_method),
+                "suggestions": [],
+            }
+
+        try:
+            from src.repositories.analysis_repo import AnalysisRepository
+
+            analysis_repo = AnalysisRepository()
+            latest_map = analysis_repo.get_latest_by_codes(list(all_symbols), days=30)
+        except Exception as e:
+            logger.warning(f"查询分析记录失败: {e}")
+            latest_map = {}
+
+        suggestions = []
+        for sym, pos_agg in position_map.items():
+            record = latest_map.get(sym)
+            if not record:
+                continue
+
+            advice = getattr(record, "operation_advice", "") or ""
+            score = getattr(record, "sentiment_score", None)
+            ideal_buy = getattr(record, "ideal_buy", None)
+            stop_loss_val = getattr(record, "stop_loss", None)
+            take_profit_val = getattr(record, "take_profit", None)
+            stock_name = getattr(record, "name", None)
+
+            qty = pos_agg["quantity"]
+            avg_cost = pos_agg["total_cost"] / qty if qty > 0 else 0
+            last_price = pos_agg["last_price"]
+
+            action, reason, qty_suggestion, price_ref, actionable = self._derive_suggestion(
+                advice=advice,
+                score=score,
+                quantity=qty,
+                avg_cost=avg_cost,
+                last_price=last_price,
+                ideal_buy=ideal_buy,
+                stop_loss=stop_loss_val,
+                take_profit=take_profit_val,
+            )
+
+            suggestions.append(
+                {
+                    "symbol": sym,
+                    "stock_name": stock_name,
+                    "action": action,
+                    "current_quantity": qty,
+                    "quantity_suggestion": qty_suggestion,
+                    "price_reference": price_ref,
+                    "current_price": last_price,
+                    "avg_cost": round(avg_cost, 4) if avg_cost else None,
+                    "sentiment_score": score,
+                    "reason": reason,
+                    "stop_loss": stop_loss_val,
+                    "take_profit": take_profit_val,
+                    "confidence": getattr(record, "confidence_level", None),
+                    "is_actionable": actionable,
+                }
+            )
+
+        # 按评分降序排列
+        suggestions.sort(key=lambda s: s.get("sentiment_score") or 0, reverse=True)
+
+        return {
+            "as_of": snapshot.get("as_of", ""),
+            "cost_method": snapshot.get("cost_method", cost_method),
+            "suggestions": suggestions,
+        }
+
+    @staticmethod
+    def _derive_suggestion(
+        *,
+        advice: str,
+        score: Optional[int],
+        quantity: float,
+        avg_cost: float,
+        last_price: float,
+        ideal_buy: Optional[float],
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+    ) -> tuple:
+        """根据分析建议和持仓状态推导交易建议"""
+        pnl_pct = ((last_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
+
+        advice_lower = advice.lower().strip()
+
+        if "卖出" in advice_lower or "sell" in advice_lower:
+            return (
+                "sell",
+                f"分析建议卖出，当前盈亏 {pnl_pct:+.2f}%",
+                quantity,
+                last_price,
+                True,
+            )
+        elif "减仓" in advice_lower or "reduce" in advice_lower:
+            reduce_qty = max(1, int(quantity * 0.5))
+            return (
+                "reduce",
+                f"分析建议减仓，当前盈亏 {pnl_pct:+.2f}%，建议减仓 50%",
+                reduce_qty,
+                last_price,
+                True,
+            )
+        elif "加仓" in advice_lower or "add" in advice_lower:
+            return (
+                "add",
+                f"分析建议加仓，评分 {score}",
+                None,
+                ideal_buy,
+                True,
+            )
+        elif "买入" in advice_lower or "buy" in advice_lower:
+            return (
+                "buy" if quantity == 0 else "add",
+                f"分析建议买入，评分 {score}",
+                None,
+                ideal_buy,
+                True,
+            )
+        elif "持有" in advice_lower or "hold" in advice_lower:
+            reason_parts = [f"分析建议持有，当前盈亏 {pnl_pct:+.2f}%"]
+            if stop_loss and last_price < stop_loss:
+                reason_parts.append(f"⚠️ 已跌破止损位 {stop_loss}")
+            if take_profit and last_price > take_profit:
+                reason_parts.append(f"✅ 已达止盈位 {take_profit}")
+            return ("hold", "；".join(reason_parts), None, None, False)
+        else:
+            return (
+                "watch",
+                f"分析建议观望，评分 {score}",
+                None,
+                None,
+                False,
+            )
+
+    # ------------------------------------------------------------------
+    # 按 symbol 查询持仓（供 Pipeline 使用）
+    # ------------------------------------------------------------------
+    def get_positions_by_symbol(self, symbol: str) -> List[Dict[str, Any]]:
+        """查询所有活跃账户中指定股票的持仓"""
+        accounts = self.repo.list_accounts(include_inactive=False)
+        result = []
+        canon = canonical_stock_code(symbol)
+        for acct in accounts:
+            try:
+                snap = self._replay_account(
+                    account=acct, as_of_date=date.today(), cost_method="fifo"
+                )
+                for pos in snap.get("positions_cache", []):
+                    pos_symbol = pos.get("symbol", "")
+                    if canonical_stock_code(pos_symbol) == canon and pos.get("quantity", 0) > 0:
+                        result.append(
+                            {
+                                "account_id": acct.id,
+                                "account_name": acct.name,
+                                "symbol": pos_symbol,
+                                "quantity": pos["quantity"],
+                                "avg_cost": pos.get("avg_cost", 0),
+                                "total_cost": pos.get("total_cost", 0),
+                                "last_price": pos.get("last_price", 0),
+                                "market_value_base": pos.get("market_value_base", 0),
+                                "unrealized_pnl_base": pos.get("unrealized_pnl_base", 0),
+                            }
+                        )
+            except Exception as e:
+                logger.warning(f"查询账户 {acct.id} 持仓失败: {e}")
+        return result
+
     def refresh_fx_rates(
         self,
         *,

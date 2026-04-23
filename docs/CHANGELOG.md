@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] 持仓分析融合：enriched snapshot API（`GET /api/v1/portfolio/snapshot/enriched`）在持仓中叠加最新 AI 分析评分与操作建议
+- [新功能] 交易建议 API（`GET /api/v1/portfolio/trade-suggestions`）根据分析结果与持仓自动生成买/加/减/卖建议
+- [新功能] 分析流水线持仓上下文注入：启用 `PORTFOLIO_ENABLED=true` 后，LLM 分析将感知用户持仓并给出针对性操作建议
+- [改进] PortfolioAgent 增强：build_user_message 注入用户真实持仓数据，供 Agent 模式下做组合级分析
+- [改进] 持仓页面新增评分/建议列、"分析全部持仓"按钮和交易建议面板
 
 ## [3.13.0] - 2026-04-21
 

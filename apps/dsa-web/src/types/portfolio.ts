@@ -297,3 +297,80 @@ export interface PortfolioFxRefreshResponse {
   staleCount: number;
   errorCount: number;
 }
+
+// ── 持仓增强（附带分析评分） ──
+
+export interface LatestAnalysisBrief {
+  sentimentScore?: number | null;
+  operationAdvice?: string | null;
+  trendPrediction?: string | null;
+  idealBuy?: number | null;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  analyzedAt?: string | null;
+}
+
+export interface EnrichedPositionItem extends PortfolioPositionItem {
+  latestAnalysis?: LatestAnalysisBrief | null;
+}
+
+export interface EnrichedAccountSnapshot {
+  accountId: number;
+  accountName: string;
+  ownerId?: string | null;
+  broker?: string | null;
+  market: string;
+  baseCurrency: string;
+  asOf: string;
+  costMethod: PortfolioCostMethod;
+  totalCash: number;
+  totalMarketValue: number;
+  totalEquity: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  feeTotal: number;
+  taxTotal: number;
+  fxStale: boolean;
+  positions: EnrichedPositionItem[];
+}
+
+export interface EnrichedSnapshotResponse {
+  asOf: string;
+  costMethod: PortfolioCostMethod;
+  currency: string;
+  accountCount: number;
+  totalCash: number;
+  totalMarketValue: number;
+  totalEquity: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  feeTotal: number;
+  taxTotal: number;
+  fxStale: boolean;
+  accounts: EnrichedAccountSnapshot[];
+}
+
+// ── 交易建议 ──
+
+export interface TradeSuggestionItem {
+  symbol: string;
+  stockName?: string | null;
+  action: 'buy' | 'add' | 'hold' | 'reduce' | 'sell' | 'watch';
+  currentQuantity: number;
+  quantitySuggestion?: number | null;
+  priceReference?: number | null;
+  currentPrice?: number | null;
+  avgCost?: number | null;
+  sentimentScore?: number | null;
+  reason: string;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  confidence?: string | null;
+  isActionable: boolean;
+}
+
+export interface TradeSuggestionResponse {
+  asOf: string;
+  costMethod: string;
+  suggestions: TradeSuggestionItem[];
+}

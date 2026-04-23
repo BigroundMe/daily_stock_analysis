@@ -30,6 +30,8 @@ from api.v1.schemas.portfolio import (
     PortfolioSnapshotResponse,
     PortfolioTradeListResponse,
     PortfolioTradeCreateRequest,
+    EnrichedSnapshotResponse,
+    TradeSuggestionResponse,
 )
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
@@ -544,6 +546,56 @@ def refresh_fx_rates(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Refresh FX rates failed", exc)
+
+
+@router.get(
+    "/snapshot/enriched",
+    response_model=EnrichedSnapshotResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Get enriched portfolio snapshot with latest analysis scores",
+)
+def get_enriched_snapshot(
+    account_id: Optional[int] = Query(None, description="Optional account id"),
+    as_of: Optional[date] = Query(None, description="Snapshot date, default today"),
+    cost_method: str = Query("fifo", description="Cost method: fifo or avg"),
+) -> EnrichedSnapshotResponse:
+    service = PortfolioService()
+    try:
+        data = service.get_enriched_snapshot(
+            account_id=account_id,
+            as_of=as_of,
+            cost_method=cost_method,
+        )
+        return EnrichedSnapshotResponse(**data)
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Get enriched snapshot failed", exc)
+
+
+@router.get(
+    "/trade-suggestions",
+    response_model=TradeSuggestionResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Get trade suggestions based on analysis + portfolio",
+)
+def get_trade_suggestions(
+    account_id: Optional[int] = Query(None, description="Optional account id"),
+    as_of: Optional[date] = Query(None, description="Date, default today"),
+    cost_method: str = Query("fifo", description="Cost method: fifo or avg"),
+) -> TradeSuggestionResponse:
+    service = PortfolioService()
+    try:
+        data = service.generate_trade_suggestions(
+            account_id=account_id,
+            as_of=as_of,
+            cost_method=cost_method,
+        )
+        return TradeSuggestionResponse(**data)
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Get trade suggestions failed", exc)
 
 
 @router.get(

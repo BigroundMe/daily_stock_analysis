@@ -19,6 +19,8 @@ import type {
   PortfolioSnapshotResponse,
   PortfolioTradeCreateRequest,
   PortfolioTradeListResponse,
+  EnrichedSnapshotResponse,
+  TradeSuggestionResponse,
 } from '../types/portfolio';
 
 type SnapshotQuery = {
@@ -262,5 +264,19 @@ export const portfolioApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return toCamelCase<PortfolioImportCommitResponse>(response.data);
+  },
+
+  async getEnrichedSnapshot(query: SnapshotQuery = {}): Promise<EnrichedSnapshotResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/snapshot/enriched', {
+      params: buildSnapshotParams(query),
+    });
+    return toCamelCase<EnrichedSnapshotResponse>(response.data);
+  },
+
+  async getTradeSuggestions(query: SnapshotQuery = {}): Promise<TradeSuggestionResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/trade-suggestions', {
+      params: buildSnapshotParams(query),
+    });
+    return toCamelCase<TradeSuggestionResponse>(response.data);
   },
 };

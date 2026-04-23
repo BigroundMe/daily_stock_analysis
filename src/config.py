@@ -716,6 +716,7 @@ class Config:
     fundamental_cache_max_entries: int = 256
 
     # === Portfolio PR2: import/risk/fx settings ===
+    portfolio_enabled: bool = False
     portfolio_risk_concentration_alert_pct: float = 35.0
     portfolio_risk_drawdown_alert_pct: float = 15.0
     portfolio_risk_stop_loss_alert_pct: float = 10.0
@@ -1412,6 +1413,7 @@ class Config:
                 field_name='FUNDAMENTAL_CACHE_MAX_ENTRIES',
                 minimum=1,
             ),
+            portfolio_enabled=parse_env_bool(os.getenv('PORTFOLIO_ENABLED'), False),
             portfolio_risk_concentration_alert_pct=parse_env_float(
                 os.getenv('PORTFOLIO_RISK_CONCENTRATION_ALERT_PCT'),
                 35.0,

@@ -128,3 +128,26 @@ class AnalysisRepository:
         except Exception as e:
             logger.error(f"统计分析记录失败: {e}")
             return 0
+
+    def get_latest_by_codes(self, codes: List[str], days: int = 30) -> Dict[str, Any]:
+        """
+        批量获取多只股票的最近一次分析记录
+
+        Args:
+            codes: 股票代码列表
+            days: 时间窗口（天）
+
+        Returns:
+            {code: AnalysisHistory} 字典，无记录的 code 不包含在内
+        """
+        result: Dict[str, Any] = {}
+        if not codes:
+            return result
+        try:
+            for code in codes:
+                records = self.db.get_analysis_history(code=code, days=days, limit=1)
+                if records:
+                    result[code] = records[0]
+        except Exception as e:
+            logger.error(f"批量获取分析记录失败: {e}")
+        return result

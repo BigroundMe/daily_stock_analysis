@@ -261,3 +261,90 @@ class PortfolioRiskResponse(BaseModel):
     sector_concentration: Dict[str, Any] = Field(default_factory=dict)
     drawdown: Dict[str, Any] = Field(default_factory=dict)
     stop_loss: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ── 持仓增强（附带分析评分） ──
+
+
+class LatestAnalysisBrief(BaseModel):
+    """最近一次分析结果摘要，附在持仓 position 上"""
+
+    sentiment_score: Optional[int] = Field(None, description="综合评分 0-100")
+    operation_advice: Optional[str] = Field(None, description="操作建议：买入/加仓/持有/减仓/卖出/观望")
+    trend_prediction: Optional[str] = Field(None, description="趋势预测：强烈看多/看多/震荡/看空/强烈看空")
+    ideal_buy: Optional[float] = Field(None, description="理想买入价")
+    stop_loss: Optional[float] = Field(None, description="止损价")
+    take_profit: Optional[float] = Field(None, description="止盈价")
+    analyzed_at: Optional[str] = Field(None, description="分析时间 ISO8601")
+
+
+class EnrichedPositionItem(PortfolioPositionItem):
+    """在 PortfolioPositionItem 基础上叠加最近分析数据"""
+
+    latest_analysis: Optional[LatestAnalysisBrief] = Field(
+        None, description="最近一次分析结果摘要，无分析记录时为 null"
+    )
+
+
+class EnrichedAccountSnapshot(BaseModel):
+    account_id: int
+    account_name: str
+    owner_id: Optional[str] = None
+    broker: Optional[str] = None
+    market: str
+    base_currency: str
+    as_of: str
+    cost_method: str
+    total_cash: float
+    total_market_value: float
+    total_equity: float
+    realized_pnl: float
+    unrealized_pnl: float
+    fee_total: float
+    tax_total: float
+    fx_stale: bool
+    positions: List[EnrichedPositionItem] = Field(default_factory=list)
+
+
+class EnrichedSnapshotResponse(BaseModel):
+    as_of: str
+    cost_method: str
+    currency: str
+    account_count: int
+    total_cash: float
+    total_market_value: float
+    total_equity: float
+    realized_pnl: float
+    unrealized_pnl: float
+    fee_total: float
+    tax_total: float
+    fx_stale: bool
+    accounts: List[EnrichedAccountSnapshot] = Field(default_factory=list)
+
+
+# ── 交易建议 ──
+
+
+class TradeSuggestionItem(BaseModel):
+    """基于分析结果 + 持仓状态生成的交易建议"""
+
+    symbol: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    action: str = Field(..., description="建议操作：buy/add/hold/reduce/sell/watch")
+    current_quantity: float = Field(0, description="当前持仓数量")
+    quantity_suggestion: Optional[float] = Field(None, description="建议交易数量")
+    price_reference: Optional[float] = Field(None, description="参考价位")
+    current_price: Optional[float] = Field(None, description="当前价格")
+    avg_cost: Optional[float] = Field(None, description="持仓均价")
+    sentiment_score: Optional[int] = Field(None, description="综合评分 0-100")
+    reason: str = Field("", description="建议理由")
+    stop_loss: Optional[float] = Field(None, description="止损价")
+    take_profit: Optional[float] = Field(None, description="止盈价")
+    confidence: Optional[str] = Field(None, description="置信度：高/中/低")
+    is_actionable: bool = Field(False, description="是否可直接操作")
+
+
+class TradeSuggestionResponse(BaseModel):
+    as_of: str
+    cost_method: str
+    suggestions: List[TradeSuggestionItem] = Field(default_factory=list)
