@@ -381,6 +381,11 @@ class SimTradingService:
                     "response_format": {"type": "json_object"},
                 }
 
+                # DeepSeek v4 Pro: 启用深度思考
+                if model == "deepseek/deepseek-v4-pro":
+                    call_kwargs["reasoning_effort"] = "high"
+                    call_kwargs["thinking"] = {"type": "enabled"}
+
                 # 补充 API key 和 extra params（legacy 路径）
                 keys = get_api_keys_for_model(model, self.config)
                 if keys:
