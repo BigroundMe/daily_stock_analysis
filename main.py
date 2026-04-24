@@ -590,6 +590,29 @@ def run_full_analysis(
         except Exception as e:
             logger.warning(f"自动回测失败（已忽略）: {e}")
 
+        # === 自动模拟交易 ===
+        try:
+            if getattr(config, "sim_trading_enabled", False):
+                from src.services.sim_trading_service import SimTradingService
+
+                logger.info("开始执行模拟交易...")
+                sim_service = SimTradingService()
+                sim_result = sim_service.run(results, is_scheduled=True)
+                status = sim_result.get("status", "unknown")
+                if status == "completed":
+                    result_data = sim_result.get("result")
+                    executed = len(result_data.executed_trades) if result_data else 0
+                    skipped = len(result_data.skipped_trades) if result_data else 0
+                    errors = len(result_data.errors) if result_data else 0
+                    logger.info(
+                        f"模拟交易完成: executed={executed} skipped={skipped} errors={errors}"
+                    )
+                else:
+                    llm_resp = sim_result.get("llm_response", "")
+                    logger.info(f"模拟交易跳过: status={status}" + (f" | LLM响应: {llm_resp}" if llm_resp else ""))
+        except Exception as e:
+            logger.warning(f"模拟交易失败（已忽略）: {e}")
+
     except Exception as e:
         logger.exception(f"分析流程执行失败: {e}")
 

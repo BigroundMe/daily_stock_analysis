@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 分析流水线持仓上下文注入：启用 `PORTFOLIO_ENABLED=true` 后，LLM 分析将感知用户持仓并给出针对性操作建议
 - [改进] PortfolioAgent 增强：build_user_message 注入用户真实持仓数据，供 Agent 模式下做组合级分析
 - [改进] 持仓页面新增评分/建议列、"分析全部持仓"按钮和交易建议面板
+- [新功能] 新增批量 LLM 组合审查 + 模拟交易执行模块（SIM_TRADING_ENABLED 控制，默认关闭），分析完成后自动从组合角度生成交易决策并执行模拟买卖
 
 ## [3.13.0] - 2026-04-21
 

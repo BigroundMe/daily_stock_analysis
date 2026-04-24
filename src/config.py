@@ -421,13 +421,13 @@ def setup_env(override: bool = False):
 class Config:
     """
     系统配置类 - 单例模式
-    
+
     设计说明：
     - 使用 dataclass 简化配置属性定义
     - 所有配置项从环境变量读取，支持默认值
     - 类方法 get_instance() 实现单例访问
     """
-    
+
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
 
@@ -540,20 +540,20 @@ class Config:
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
 
     # === 通知配置（可同时配置多个，全部推送）===
-    
+
     # 企业微信 Webhook
     wechat_webhook_url: Optional[str] = None
-    
+
     # 飞书 Webhook
     feishu_webhook_url: Optional[str] = None
     feishu_webhook_secret: Optional[str] = None  # 自定义机器人签名密钥（可选）
     feishu_webhook_keyword: Optional[str] = None  # 自定义机器人关键词（可选）
-    
+
     # Telegram 配置（需要同时配置 Bot Token 和 Chat ID）
     telegram_bot_token: Optional[str] = None  # Bot Token（@BotFather 获取）
     telegram_chat_id: Optional[str] = None  # Chat ID
     telegram_message_thread_id: Optional[str] = None  # Topic ID (Message Thread ID) for groups
-    
+
     # 邮件配置（只需邮箱和授权码，SMTP 自动识别）
     email_sender: Optional[str] = None  # 发件人邮箱
     email_sender_name: str = "daily_stock_analysis股票分析助手"  # 发件人显示名称
@@ -567,7 +567,7 @@ class Config:
     # Pushover 配置（手机/桌面推送通知）
     pushover_user_key: Optional[str] = None  # 用户 Key（https://pushover.net 获取）
     pushover_api_token: Optional[str] = None  # 应用 API Token
-    
+
     # 自定义 Webhook（支持多个，逗号分隔）
     # 适用于：钉钉、Discord、Slack、自建服务等任意支持 POST JSON 的 Webhook
     custom_webhook_urls: List[str] = field(default_factory=list)
@@ -649,17 +649,25 @@ class Config:
     backtest_min_age_days: int = 14
     backtest_engine_version: str = "v1"
     backtest_neutral_band_pct: float = 2.0
-    
+
+    # === 模拟交易配置 ===
+    sim_trading_enabled: bool = False
+    sim_trading_account_id: Optional[int] = None
+    sim_trading_max_single_amount: float = 100000.0
+    sim_trading_default_commission: float = 5.0
+    sim_trading_model: str = ""  # 模拟交易专用 LLM 模型，为空时回退到 litellm_model
+    sim_trading_fallback_models: List[str] = field(default_factory=list)  # 模拟交易 fallback 模型列表
+
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
     log_level: str = "INFO"  # 日志级别
-    
+
     # === 系统配置 ===
     max_workers: int = 3  # 低并发防封禁
     debug: bool = False
     http_proxy: Optional[str] = None  # HTTP 代理 (例如: http://127.0.0.1:10809)
-    https_proxy: Optional[str] = None # HTTPS 代理
-    
+    https_proxy: Optional[str] = None  # HTTPS 代理
+
     # === 定时任务配置 ===
     schedule_enabled: bool = False            # 是否启用定时任务
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
@@ -731,43 +739,43 @@ class Config:
     # Akshare 请求间隔范围（秒）
     akshare_sleep_min: float = 2.0
     akshare_sleep_max: float = 5.0
-    
+
     # Tushare 每分钟最大请求数（免费配额）
     tushare_rate_limit_per_minute: int = 80
-    
+
     # 重试配置
     max_retries: int = 3
     retry_base_delay: float = 1.0
     retry_max_delay: float = 30.0
-    
+
     # === WebUI 配置 ===
     webui_enabled: bool = False
     webui_host: str = "127.0.0.1"
     webui_port: int = 8000
-    
+
     # === 机器人配置 ===
     bot_enabled: bool = True              # 是否启用机器人功能
     bot_command_prefix: str = "/"         # 命令前缀
     bot_rate_limit_requests: int = 10     # 频率限制：窗口内最大请求数
     bot_rate_limit_window: int = 60       # 频率限制：窗口时间（秒）
     bot_admin_users: List[str] = field(default_factory=list)  # 管理员用户 ID 列表
-    
+
     # 飞书机器人（事件订阅）- 已有 feishu_app_id, feishu_app_secret
     feishu_verification_token: Optional[str] = None  # 事件订阅验证 Token
     feishu_encrypt_key: Optional[str] = None         # 消息加密密钥（可选）
     feishu_stream_enabled: bool = False              # 是否启用 Stream 长连接模式（无需公网IP）
-    
+
     # 钉钉机器人
     dingtalk_app_key: Optional[str] = None      # 应用 AppKey
     dingtalk_app_secret: Optional[str] = None   # 应用 AppSecret
     dingtalk_stream_enabled: bool = False       # 是否启用 Stream 模式（无需公网IP）
-    
+
     # 企业微信机器人（回调模式）
     wecom_corpid: Optional[str] = None              # 企业 ID
     wecom_token: Optional[str] = None               # 回调 Token
     wecom_encoding_aes_key: Optional[str] = None    # 消息加解密密钥
     wecom_agent_id: Optional[str] = None            # 应用 AgentId
-    
+
     # Telegram 机器人 - 已有 telegram_bot_token, telegram_chat_id
     telegram_webhook_secret: Optional[str] = None   # Webhook 密钥
 
@@ -821,12 +829,12 @@ class Config:
 
     # 单例实例存储
     _instance: Optional['Config'] = None
-    
+
     @classmethod
     def get_instance(cls) -> 'Config':
         """
         获取配置单例实例
-        
+
         单例模式确保：
         1. 全局只有一个配置实例
         2. 配置只从环境变量加载一次
@@ -835,12 +843,12 @@ class Config:
         if cls._instance is None:
             cls._instance = cls._load_from_env()
         return cls._instance
-    
+
     @classmethod
     def _load_from_env(cls) -> 'Config':
         """
         从 .env 文件加载配置
-        
+
         加载优先级：
         1. 大多数配置保持系统环境变量优先
         2. WebUI 可写的运行期关键键优先复用持久化 `.env`，但保留启动时显式进程环境变量的 override
@@ -893,7 +901,6 @@ class Config:
                 os.environ['HTTPS_PROXY'] = https_proxy
                 os.environ['https_proxy'] = https_proxy
 
-        
         # 解析自选股列表（逗号分隔，统一为大写 Issue #355）
         stock_list_str = cls._resolve_env_value(
             'STOCK_LIST',
@@ -905,11 +912,11 @@ class Config:
             for c in stock_list_str.split(',')
             if (c or "").strip()
         ]
-        
+
         # 如果没有配置，使用默认的示例股票
         if not stock_list:
             stock_list = ['600519', '000001', '300750']
-        
+
         # === LiteLLM multi-key parsing ===
         # GEMINI_API_KEYS (comma-separated) > GEMINI_API_KEY (single)
         _gemini_keys_raw = os.getenv('GEMINI_API_KEYS', '')
@@ -1041,10 +1048,10 @@ class Config:
 
         minimax_keys_str = os.getenv('MINIMAX_API_KEYS', '')
         minimax_api_keys = [k.strip() for k in minimax_keys_str.split(',') if k.strip()]
-        
+
         tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
         tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
-        
+
         serpapi_keys_str = os.getenv('SERPAPI_API_KEYS', '')
         serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
 
@@ -1115,7 +1122,7 @@ class Config:
         report_language_raw = cls._resolve_report_language_env_value(
             preexisting_report_language
         )
-        
+
         return cls(
             stock_list=stock_list,
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
@@ -1325,6 +1332,23 @@ class Config:
                 field_name='BACKTEST_NEUTRAL_BAND_PCT',
                 minimum=0.0,
             ),
+            sim_trading_enabled=parse_env_bool(os.getenv('SIM_TRADING_ENABLED'), False),
+            sim_trading_account_id=parse_env_int(
+                os.getenv('SIM_TRADING_ACCOUNT_ID'), 0, field_name='SIM_TRADING_ACCOUNT_ID', minimum=1
+            ) if os.getenv('SIM_TRADING_ACCOUNT_ID') else None,
+            sim_trading_max_single_amount=parse_env_float(
+                os.getenv('SIM_TRADING_MAX_SINGLE_AMOUNT'), 100000.0,
+                field_name='SIM_TRADING_MAX_SINGLE_AMOUNT', minimum=0.0,
+            ),
+            sim_trading_default_commission=parse_env_float(
+                os.getenv('SIM_TRADING_DEFAULT_COMMISSION'), 5.0,
+                field_name='SIM_TRADING_DEFAULT_COMMISSION', minimum=0.0,
+            ),
+            sim_trading_model=os.getenv('SIM_TRADING_MODEL', '').strip(),
+            sim_trading_fallback_models=[
+                m.strip() for m in os.getenv('SIM_TRADING_FALLBACK_MODELS', '').split(',')
+                if m.strip()
+            ],
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=parse_env_int(os.getenv('MAX_WORKERS'), 3, field_name='MAX_WORKERS', minimum=1),
@@ -1452,7 +1476,7 @@ class Config:
             guard_enabled=os.getenv('GUARD_ENABLED', 'true').lower() != 'false',
             guard_strict_mode=os.getenv('GUARD_STRICT_MODE', 'false').lower() == 'true',
         )
-    
+
     @classmethod
     def _parse_litellm_yaml(cls, config_path: str) -> List[Dict[str, Any]]:
         """Parse a standard LiteLLM config YAML file into Router model_list.
@@ -1967,7 +1991,7 @@ class Config:
     def refresh_stock_list(self) -> None:
         """
         热读取 STOCK_LIST 环境变量并更新配置中的自选股列表
-        
+
         支持两种配置方式：
         1. .env 文件（本地开发、定时任务模式） - 修改后下次执行自动生效
         2. 系统环境变量（GitHub Actions、Docker） - 启动时固定，运行中不变
@@ -1996,7 +2020,7 @@ class Config:
             stock_list = ['000001']
 
         self.stock_list = stock_list
-    
+
     def validate_structured(self) -> List[ConfigIssue]:
         """Return structured validation issues with severity levels.
 
@@ -2301,11 +2325,11 @@ class Config:
             List of message strings, one per ConfigIssue.
         """
         return [issue.message for issue in self.validate_structured()]
-    
+
     def get_db_url(self) -> str:
         """
         获取 SQLAlchemy 数据库连接 URL
-        
+
         自动创建数据库目录（如果不存在）
         """
         db_path = Path(self.database_path)
@@ -2369,7 +2393,7 @@ if __name__ == "__main__":
     print(f"数据库路径: {config.database_path}")
     print(f"最大并发数: {config.max_workers}")
     print(f"调试模式: {config.debug}")
-    
+
     # 验证配置
     warnings = config.validate()
     if warnings:
