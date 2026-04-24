@@ -85,7 +85,7 @@ class Scheduler:
         self._schedule_time_provider = schedule_time_provider
         self.shutdown_handler = GracefulShutdown()
         self._task_callback: Optional[Callable] = None
-        self._daily_job: Optional[Any] = None
+        self._daily_jobs: List[Any] = []
         self._background_tasks: List[Dict[str, Any]] = []
         self._running = False
 
@@ -107,28 +107,29 @@ class Scheduler:
 
     @staticmethod
     def _is_valid_schedule_time(schedule_time: str) -> bool:
-        """Validate time string in HH:MM 24-hour format."""
-        candidate = (schedule_time or "").strip()
-        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", candidate):
+        """校验时间字符串，支持单个 HH:MM 或逗号分隔的多个 HH:MM。"""
+        raw = (schedule_time or "").strip()
+        if not raw:
             return False
+        pattern = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+        for part in raw.split(","):
+            if not pattern.fullmatch(part.strip()):
+                return False
         return True
 
     def _cancel_daily_job(self) -> None:
-        """Remove the currently registered daily job if one exists."""
-        if self._daily_job is None:
-            return
-
-        if hasattr(self.schedule, "cancel_job"):
-            self.schedule.cancel_job(self._daily_job)
-        else:  # pragma: no cover - compatibility fallback
-            jobs = getattr(self.schedule, "jobs", None)
-            if isinstance(jobs, list) and self._daily_job in jobs:
-                jobs.remove(self._daily_job)
-
-        self._daily_job = None
+        """取消所有已注册的 daily job。"""
+        for job in self._daily_jobs:
+            if hasattr(self.schedule, "cancel_job"):
+                self.schedule.cancel_job(job)
+            else:  # pragma: no cover - compatibility fallback
+                jobs = getattr(self.schedule, "jobs", None)
+                if isinstance(jobs, list) and job in jobs:
+                    jobs.remove(job)
+        self._daily_jobs = []
 
     def _configure_daily_task(self, schedule_time: str) -> bool:
-        """(Re)register the daily job at the requested time."""
+        """（重新）注册 daily job，支持逗号分隔的多个时间点。"""
         candidate = (schedule_time or "").strip()
         if not self._is_valid_schedule_time(candidate):
             logger.warning(
@@ -140,7 +141,11 @@ class Scheduler:
 
         previous_time = self.schedule_time
         self._cancel_daily_job()
-        self._daily_job = self.schedule.every().day.at(candidate).do(self._safe_run_task)
+
+        time_points = [t.strip() for t in candidate.split(",")]
+        for t in time_points:
+            job = self.schedule.every().day.at(t).do(self._safe_run_task)
+            self._daily_jobs.append(job)
         self.schedule_time = candidate
 
         if previous_time == candidate:
