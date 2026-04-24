@@ -24,6 +24,9 @@ import type {
   EnrichedSnapshotResponse,
   TradeSuggestionItem,
 } from '../types/portfolio';
+import TradeEditModal from '../components/portfolio/TradeEditModal';
+import PendingTradesTab from '../components/portfolio/PendingTradesTab';
+import SimTradingToggle from '../components/portfolio/SimTradingToggle';
 
 const PIE_COLORS = ['#00d4ff', '#00ff88', '#ffaa00', '#ff7a45', '#7f8cff', '#ff4466'];
 const DEFAULT_PAGE_SIZE = 20;
@@ -182,6 +185,8 @@ const PortfolioPage: React.FC = () => {
   const [tradeSuggestions, setTradeSuggestions] = useState<TradeSuggestionItem[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [analyzingAll, setAnalyzingAll] = useState(false);
+  const [editingTrade, setEditingTrade] = useState<PortfolioTradeListItem | null>(null);
+  const [approvalRequired, setApprovalRequired] = useState(false);
 
   const [brokers, setBrokers] = useState<PortfolioImportBrokerItem[]>([]);
   const [selectedBroker, setSelectedBroker] = useState('huatai');
@@ -855,6 +860,9 @@ const PortfolioPage: React.FC = () => {
                 </button>
               </div>
             </div>
+            <div className="mt-2 border-t border-white/5 pt-2">
+              <SimTradingToggle onChange={(value) => setApprovalRequired(value)} />
+            </div>
           </div>
         ) : (
           <InlineAlert
@@ -1145,6 +1153,10 @@ const PortfolioPage: React.FC = () => {
         )}
       </Card>
 
+      {approvalRequired && writableAccountId && (
+        <PendingTradesTab accountId={writableAccountId} />
+      )}
+
       {writeBlocked && hasAccounts ? (
         <InlineAlert
           variant="warning"
@@ -1370,19 +1382,31 @@ const PortfolioPage: React.FC = () => {
                   <div className="min-w-0">
                     {item.tradeDate} {formatSideLabel(item.side)} {item.symbol} 数量={item.quantity} 价格={item.price}
                   </div>
-                  {!writeBlocked ? (
+                  <div className="flex shrink-0 gap-1">
                     <button
                       type="button"
-                      className="btn-secondary shrink-0 !px-3 !py-1 !text-[11px]"
-                      onClick={() => openDeleteDialog({
-                        eventType: 'trade',
-                        id: item.id,
-                        message: `确认删除 ${item.tradeDate} 的${formatSideLabel(item.side)}流水 ${item.symbol}（数量 ${item.quantity}，价格 ${item.price}）吗？`,
-                      })}
+                      className="btn-secondary shrink-0 !p-1"
+                      title="编辑"
+                      onClick={() => setEditingTrade(item)}
                     >
-                      删除
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                      </svg>
                     </button>
-                  ) : null}
+                    {!writeBlocked ? (
+                      <button
+                        type="button"
+                        className="btn-secondary shrink-0 !px-3 !py-1 !text-[11px]"
+                        onClick={() => openDeleteDialog({
+                          eventType: 'trade',
+                          id: item.id,
+                          message: `确认删除 ${item.tradeDate} 的${formatSideLabel(item.side)}流水 ${item.symbol}（数量 ${item.quantity}，价格 ${item.price}）吗？`,
+                        })}
+                      >
+                        删除
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               ))}
               {eventType === 'cash' && cashEvents.map((item) => (
@@ -1452,6 +1476,17 @@ const PortfolioPage: React.FC = () => {
           </div>
         </Card>
       </section>
+      {editingTrade && (
+        <TradeEditModal
+          trade={editingTrade}
+          isOpen={!!editingTrade}
+          onClose={() => setEditingTrade(null)}
+          onSave={() => {
+            setEditingTrade(null);
+            void refreshPortfolioData();
+          }}
+        />
+      )}
       <ConfirmDialog
         isOpen={Boolean(pendingDelete)}
         title="删除错误流水"

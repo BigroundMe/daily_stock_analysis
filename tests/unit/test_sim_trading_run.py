@@ -32,6 +32,7 @@ def service(mock_portfolio_service):
         cfg.sim_trading_enabled = True
         cfg.sim_trading_account_id = 1
         cfg.sim_trading_max_single_amount = 100000.0
+        cfg.sim_trading_approval_required = False
         cfg.litellm_model = "openai/gpt-4o-mini"
         cfg.llm_temperature = 0.7
         mock_cfg.return_value = cfg

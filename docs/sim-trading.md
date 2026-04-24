@@ -12,6 +12,7 @@
 | `SIM_TRADING_ACCOUNT_ID` | 无 | 使用的持仓账户 ID（必须配置） |
 | `SIM_TRADING_MAX_SINGLE_AMOUNT` | `100000` | 单笔交易最大金额（元） |
 | `SIM_TRADING_DEFAULT_COMMISSION` | `5.0` | 默认交易佣金（元） |
+| `SIM_TRADING_APPROVAL_REQUIRED` | `false` | 模拟交易审批开关。设为 `true` 时，`--schedule` 模式下的模拟交易不再自动执行，而是进入待审批队列，需要用户在 Web 前端手动批准或拒绝。仅影响 schedule 模式，API/bot 触发不受影响。 |
 
 ## 触发条件
 
@@ -54,3 +55,19 @@
    ```
 
 3. 分析完成后自动执行模拟交易，结果记录在日志和持仓系统中。
+
+### 审批开关
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `SIM_TRADING_APPROVAL_REQUIRED` | `false` | 是否开启模拟交易手动审批。开启后，schedule 模式下 LLM 产出的交易决策不再自动执行，而是保存到待审批队列（`pending_sim_trades` 表），需要用户在 Web 前端手动批准或拒绝后才执行入库。API 和 bot 触发的模拟交易不受此开关影响。 |
+
+**审批流程**：
+
+1. `--schedule` 模式执行分析后，LLM 产出交易建议
+2. 如果 `SIM_TRADING_APPROVAL_REQUIRED=true`，交易建议写入 `pending_sim_trades` 表
+3. 用户在 Web 前端的「待审批交易」区块查看决策详情和 LLM 推理
+4. 点击「批准」执行交易（使用 LLM 原始建议价格），或点击「拒绝」放弃
+5. 配置可通过 API 或前端 Toggle 热切换，变更持久化到 `.env` 文件
+
+**注意**：审批通过时使用 LLM 决策时的建议价格，不重新获取实时行情。交易日期使用 LLM 决策生成时的日期。

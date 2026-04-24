@@ -247,6 +247,51 @@ class PortfolioRepository:
             session.expunge(row)
             return row
 
+    def update_trade(self, trade_id: int, updates: Dict[str, Any]) -> Optional[PortfolioTrade]:
+        """更新交易记录的可编辑字段。
+
+        仅允许修改：quantity, price, fee, tax, note。
+        其他字段（symbol, side, trade_date, account_id 等）被忽略。
+
+        Args:
+            trade_id: 交易记录 ID
+            updates: 要更新的字段字典
+
+        Returns:
+            更新后的 PortfolioTrade 对象，如果不存在则返回 None
+        """
+        with self.portfolio_write_session() as session:
+            result = self.update_trade_in_session(session=session, trade_id=trade_id, updates=updates)
+            if result is not None:
+                session.expunge(result)
+            return result
+
+    def update_trade_in_session(
+        self, *, session: Any, trade_id: int, updates: Dict[str, Any]
+    ) -> Optional[PortfolioTrade]:
+        """在已有 session 中更新交易记录的可编辑字段。"""
+        _ALLOWED_FIELDS = {"quantity", "price", "fee", "tax", "note"}
+        filtered = {k: v for k, v in updates.items() if k in _ALLOWED_FIELDS and v is not None}
+
+        trade = session.execute(
+            select(PortfolioTrade).where(PortfolioTrade.id == trade_id).limit(1)
+        ).scalar_one_or_none()
+        if trade is None:
+            return None
+
+        if filtered:
+            for field, value in filtered.items():
+                setattr(trade, field, value)
+            self._invalidate_account_cache_in_session(
+                session=session,
+                account_id=int(trade.account_id),
+                from_date=trade.trade_date,
+            )
+            session.flush()
+
+        session.refresh(trade)
+        return trade
+
     def delete_trade(self, trade_id: int) -> bool:
         with self.portfolio_write_session() as session:
             return self.delete_trade_in_session(session=session, trade_id=trade_id)
@@ -1083,3 +1128,131 @@ class PortfolioRepository:
                 existing.updated_at = datetime.now()
 
             session.commit()
+
+    # ------------------------------------------------------------------
+    # PendingSimTrade CRUD
+    # ------------------------------------------------------------------
+
+    def add_pending_sim_trade(
+        self,
+        account_id: int,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        fee: float = 0.0,
+        tax: float = 0.0,
+        note: str = "",
+        llm_reasoning: str = "",
+    ) -> int:
+        """添加待审批的模拟交易记录。返回新记录 ID。"""
+        with self.portfolio_write_session() as session:
+            from src.storage import PendingSimTrade
+            record = PendingSimTrade(
+                account_id=account_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                fee=fee,
+                tax=tax,
+                note=note,
+                llm_reasoning=llm_reasoning,
+            )
+            session.add(record)
+            session.commit()
+            return record.id
+
+    def get_pending_sim_trade(self, pending_id: int):
+        """获取单条待审批交易。不存在返回 None。"""
+        with self.db.get_session() as session:
+            from src.storage import PendingSimTrade
+            row = session.query(PendingSimTrade).filter_by(id=pending_id).first()
+            if row:
+                from sqlalchemy.orm import make_transient
+                session.expunge(row)
+                make_transient(row)
+            return row
+
+    def list_pending_sim_trades(
+        self,
+        account_id: int = None,
+        status: str = None,
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        """列出待审批交易。返回 (items, total)。"""
+        with self.db.get_session() as session:
+            from src.storage import PendingSimTrade
+            q = session.query(PendingSimTrade)
+            if account_id is not None:
+                q = q.filter(PendingSimTrade.account_id == account_id)
+            if status is not None:
+                q = q.filter(PendingSimTrade.status == status)
+            total = q.count()
+            items = (
+                q.order_by(PendingSimTrade.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+                .all()
+            )
+            from sqlalchemy.orm import make_transient
+            for item in items:
+                session.expunge(item)
+                make_transient(item)
+            return items, total
+
+    def update_pending_sim_trade_status(
+        self, pending_id: int, status: str, reviewer_note: str = ""
+    ) -> bool:
+        """更新待审批交易状态。成功返回 True。"""
+        with self.portfolio_write_session() as session:
+            from src.storage import PendingSimTrade
+            row = session.query(PendingSimTrade).filter_by(id=pending_id).first()
+            if row is None:
+                return False
+            row.status = status
+            row.reviewer_note = reviewer_note
+            row.reviewed_at = datetime.now()
+            session.commit()
+            return True
+
+    def update_pending_sim_trade_status_in_session(
+        self, session, pending_id: int, status: str, reviewer_note: str = ""
+    ) -> bool:
+        """在已有 session 中更新待审批交易状态（用于事务内调用）。"""
+        from src.storage import PendingSimTrade
+        row = session.query(PendingSimTrade).filter_by(id=pending_id).first()
+        if row is None:
+            return False
+        row.status = status
+        row.reviewer_note = reviewer_note
+        row.reviewed_at = datetime.now()
+        return True
+
+    def delete_pending_sim_trade(self, pending_id: int) -> bool:
+        """删除待审批交易记录。成功返回 True。"""
+        with self.portfolio_write_session() as session:
+            from src.storage import PendingSimTrade
+            row = session.query(PendingSimTrade).filter_by(id=pending_id).first()
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
+    def has_pending_or_approved_today(self, account_id: int) -> bool:
+        """检查当日是否已有 pending 或 approved 的模拟交易记录。"""
+        with self.db.get_session() as session:
+            from src.storage import PendingSimTrade
+            today_start = datetime.combine(date.today(), datetime.min.time())
+            count = (
+                session.query(PendingSimTrade)
+                .filter(
+                    PendingSimTrade.account_id == account_id,
+                    PendingSimTrade.status.in_(["pending", "approved"]),
+                    PendingSimTrade.created_at >= today_start,
+                )
+                .count()
+            )
+            return count > 0

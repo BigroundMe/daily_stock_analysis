@@ -21,6 +21,11 @@ import type {
   PortfolioTradeListResponse,
   EnrichedSnapshotResponse,
   TradeSuggestionResponse,
+  TradeUpdateRequest,
+  TradeUpdateResponse,
+  PendingSimTradeListResponse,
+  SimTradingConfig,
+  SimTradingConfigUpdateRequest,
 } from '../types/portfolio';
 
 type SnapshotQuery = {
@@ -278,5 +283,65 @@ export const portfolioApi = {
       params: buildSnapshotParams(query),
     });
     return toCamelCase<TradeSuggestionResponse>(response.data);
+  },
+
+  // ── 交易编辑 ──
+
+  async updateTrade(tradeId: number, data: TradeUpdateRequest): Promise<TradeUpdateResponse> {
+    const body: Record<string, unknown> = {};
+    if (data.quantity != null) body.quantity = data.quantity;
+    if (data.price != null) body.price = data.price;
+    if (data.fee != null) body.fee = data.fee;
+    if (data.tax != null) body.tax = data.tax;
+    if (data.note !== undefined) body.note = data.note;
+    const response = await apiClient.put<Record<string, unknown>>(`/api/v1/portfolio/trades/${tradeId}`, body);
+    return toCamelCase<TradeUpdateResponse>(response.data);
+  },
+
+  // ── 模拟交易审批 ──
+
+  async getPendingSimTrades(params?: {
+    accountId?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<PendingSimTradeListResponse> {
+    const query: Record<string, string | number> = {};
+    if (params?.accountId != null) query.account_id = params.accountId;
+    if (params?.page != null) query.page = params.page;
+    if (params?.pageSize != null) query.page_size = params.pageSize;
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/sim-trades/pending', {
+      params: query,
+    });
+    return toCamelCase<PendingSimTradeListResponse>(response.data);
+  },
+
+  async approvePendingTrade(id: number, reviewerNote?: string): Promise<void> {
+    await apiClient.post(`/api/v1/portfolio/sim-trades/${id}/approve`, {
+      reviewer_note: reviewerNote,
+    });
+  },
+
+  async rejectPendingTrade(id: number, reviewerNote?: string): Promise<void> {
+    await apiClient.post(`/api/v1/portfolio/sim-trades/${id}/reject`, {
+      reviewer_note: reviewerNote,
+    });
+  },
+
+  async deletePendingTrade(id: number): Promise<void> {
+    await apiClient.delete(`/api/v1/portfolio/sim-trades/${id}`);
+  },
+
+  // ── 模拟交易配置 ──
+
+  async getSimTradingConfig(): Promise<SimTradingConfig> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/sim-trading/config');
+    return toCamelCase<SimTradingConfig>(response.data);
+  },
+
+  async updateSimTradingConfig(data: SimTradingConfigUpdateRequest): Promise<SimTradingConfig> {
+    const response = await apiClient.put<Record<string, unknown>>('/api/v1/portfolio/sim-trading/config', {
+      approval_required: data.approvalRequired,
+    });
+    return toCamelCase<SimTradingConfig>(response.data);
   },
 };

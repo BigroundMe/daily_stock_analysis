@@ -657,6 +657,7 @@ class Config:
     sim_trading_default_commission: float = 5.0
     sim_trading_model: str = ""  # 模拟交易专用 LLM 模型，为空时回退到 litellm_model
     sim_trading_fallback_models: List[str] = field(default_factory=list)  # 模拟交易 fallback 模型列表
+    sim_trading_approval_required: bool = False  # 模拟交易审批开关（仅影响 schedule 模式）
 
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
@@ -1349,6 +1350,9 @@ class Config:
                 m.strip() for m in os.getenv('SIM_TRADING_FALLBACK_MODELS', '').split(',')
                 if m.strip()
             ],
+            sim_trading_approval_required=parse_env_bool(
+                os.getenv('SIM_TRADING_APPROVAL_REQUIRED'), False
+            ),
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=parse_env_int(os.getenv('MAX_WORKERS'), 3, field_name='MAX_WORKERS', minimum=1),

@@ -28,19 +28,26 @@ from api.v1.schemas.portfolio import (
     PortfolioImportTradeItem,
     PortfolioRiskResponse,
     PortfolioSnapshotResponse,
+    PortfolioTradeListItem,
     PortfolioTradeListResponse,
     PortfolioTradeCreateRequest,
+    PortfolioTradeUpdateRequest,
+    PortfolioTradeUpdateResponse,
     EnrichedSnapshotResponse,
+    PendingSimTradeReviewRequest,
+    SimTradingConfigUpdateRequest,
     TradeSuggestionResponse,
 )
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_service import (
+    OversellError,
     PortfolioBusyError,
     PortfolioConflictError,
     PortfolioOversellError,
     PortfolioService,
 )
+from src.services.sim_trading_service import SimTradingService
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +270,66 @@ def delete_trade(trade_id: int) -> PortfolioDeleteResponse:
         raise
     except Exception as exc:
         raise _internal_error("Delete trade event failed", exc)
+
+
+def _trade_orm_to_dict(trade) -> dict:
+    """将 PortfolioTrade ORM 对象序列化为 PortfolioTradeListItem 兼容的 dict。"""
+    return {
+        "id": trade.id,
+        "account_id": trade.account_id,
+        "trade_uid": trade.trade_uid,
+        "symbol": trade.symbol,
+        "market": trade.market,
+        "currency": trade.currency,
+        "trade_date": trade.trade_date.isoformat() if trade.trade_date else None,
+        "side": trade.side,
+        "quantity": trade.quantity,
+        "price": trade.price,
+        "fee": trade.fee or 0.0,
+        "tax": trade.tax or 0.0,
+        "note": trade.note,
+        "created_at": trade.created_at.isoformat() if trade.created_at else None,
+    }
+
+
+@router.put(
+    "/trades/{trade_id}",
+    response_model=PortfolioTradeUpdateResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Update trade event",
+)
+def update_trade(trade_id: int, body: PortfolioTradeUpdateRequest) -> PortfolioTradeUpdateResponse:
+    """编辑交易记录（仅 quantity/price/fee/tax/note）。
+
+    如果编辑后出现 oversell，返回 400 错误。
+    """
+    service = PortfolioService()
+    try:
+        updates = body.model_dump(exclude_none=True)
+        trade = service.update_trade_event(trade_id, updates)
+        return PortfolioTradeUpdateResponse(
+            trade=PortfolioTradeListItem(**_trade_orm_to_dict(trade)),
+            oversell_violations=[],
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": str(exc)},
+        )
+    except OversellError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "oversell", "message": "编辑导致 oversell 违规", "violations": exc.violations},
+        )
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except Exception as exc:
+        raise _internal_error("Update trade event failed", exc)
 
 
 @router.post(
@@ -617,3 +684,182 @@ def get_risk_report(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Get risk report failed", exc)
+
+
+# ------------------------------------------------------------------
+# PendingSimTrade 审批端点
+# ------------------------------------------------------------------
+
+
+def _pending_to_dict(item) -> dict:
+    """将 PendingSimTrade ORM 对象转换为字典。"""
+    return {
+        "id": item.id,
+        "account_id": item.account_id,
+        "symbol": item.symbol,
+        "side": item.side,
+        "quantity": float(item.quantity),
+        "price": float(item.price),
+        "fee": float(item.fee or 0),
+        "tax": float(item.tax or 0),
+        "note": item.note,
+        "llm_reasoning": item.llm_reasoning,
+        "status": item.status,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "reviewed_at": item.reviewed_at.isoformat() if item.reviewed_at else None,
+        "reviewer_note": item.reviewer_note,
+    }
+
+
+@router.get(
+    "/sim-trades/pending",
+    summary="List pending sim trades",
+)
+def list_pending_sim_trades(
+    account_id: Optional[int] = Query(None, description="Optional account id filter"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """获取待审批模拟交易列表。"""
+    service = PortfolioService()
+    repo = service.repo
+    try:
+        items, total = repo.list_pending_sim_trades(
+            account_id=account_id, status="pending", page=page, page_size=page_size
+        )
+        return {
+            "items": [_pending_to_dict(i) for i in items],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+    except Exception as exc:
+        raise _internal_error("List pending sim trades failed", exc)
+
+
+@router.post(
+    "/sim-trades/{pending_id}/approve",
+    summary="Approve pending sim trade",
+)
+def approve_pending_trade(
+    pending_id: int,
+    body: PendingSimTradeReviewRequest = None,
+):
+    """批准待审批交易。"""
+    sim_service = SimTradingService()
+    repo = sim_service.repo
+    try:
+        pending = repo.get_pending_sim_trade(pending_id)
+        if pending is None:
+            raise HTTPException(status_code=404, detail="Pending trade not found")
+        if pending.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Trade already {pending.status}")
+
+        reviewer_note = body.reviewer_note if body else ""
+        result = sim_service.execute_pending_trade(pending_id, reviewer_note or "")
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Execute failed"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_error("Approve pending trade failed", exc)
+
+
+@router.post(
+    "/sim-trades/{pending_id}/reject",
+    summary="Reject pending sim trade",
+)
+def reject_pending_trade(
+    pending_id: int,
+    body: PendingSimTradeReviewRequest = None,
+):
+    """拒绝待审批交易。"""
+    service = PortfolioService()
+    repo = service.repo
+    try:
+        pending = repo.get_pending_sim_trade(pending_id)
+        if pending is None:
+            raise HTTPException(status_code=404, detail="Pending trade not found")
+        if pending.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Trade already {pending.status}")
+
+        reviewer_note = body.reviewer_note if body else ""
+        success = repo.update_pending_sim_trade_status(pending_id, "rejected", reviewer_note or "")
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to reject")
+        return {"status": "rejected"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_error("Reject pending trade failed", exc)
+
+
+@router.delete(
+    "/sim-trades/{pending_id}",
+    summary="Delete pending sim trade",
+)
+def delete_pending_trade(pending_id: int):
+    """删除待审批交易记录。"""
+    service = PortfolioService()
+    repo = service.repo
+    try:
+        success = repo.delete_pending_sim_trade(pending_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Pending trade not found")
+        return {"status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_error("Delete pending trade failed", exc)
+
+
+# ------------------------------------------------------------------
+# SimTrading 配置端点
+# ------------------------------------------------------------------
+
+
+@router.get(
+    "/sim-trading/config",
+    summary="Get sim trading config",
+)
+def get_sim_trading_config():
+    """获取模拟交易配置。"""
+    from src.config import get_config
+
+    config = get_config()
+    return {
+        "approval_required": config.sim_trading_approval_required,
+        "sim_trading_enabled": config.sim_trading_enabled,
+        "sim_trading_account_id": config.sim_trading_account_id,
+    }
+
+
+@router.put(
+    "/sim-trading/config",
+    summary="Update sim trading config",
+)
+def update_sim_trading_config(body: SimTradingConfigUpdateRequest):
+    """更新审批配置并持久化到 .env。"""
+    from src.config import Config, get_config
+    from src.core.config_manager import ConfigManager
+
+    config = get_config()
+    config.sim_trading_approval_required = body.approval_required
+
+    # 持久化到 .env 文件
+    try:
+        config_mgr = ConfigManager()
+        config_mgr.apply_updates(
+            updates=[("SIM_TRADING_APPROVAL_REQUIRED", str(body.approval_required).lower())],
+            sensitive_keys=set(),
+            mask_token="",
+        )
+    except Exception as exc:
+        logger.warning("持久化 .env 失败: %s", exc)
+
+    return {
+        "approval_required": config.sim_trading_approval_required,
+        "sim_trading_enabled": config.sim_trading_enabled,
+        "sim_trading_account_id": config.sim_trading_account_id,
+    }

@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] PortfolioAgent 增强：build_user_message 注入用户真实持仓数据，供 Agent 模式下做组合级分析
 - [改进] 持仓页面新增评分/建议列、"分析全部持仓"按钮和交易建议面板
 - [新功能] 新增批量 LLM 组合审查 + 模拟交易执行模块（SIM_TRADING_ENABLED 控制，默认关闭），分析完成后自动从组合角度生成交易决策并执行模拟买卖
+- [新功能] 持仓交易流水编辑：支持修改已有交易的数量/价格/手续费/税费/备注，编辑后自动校验 oversell 约束（硬阻断）
+- [新功能] 模拟交易审批开关：`SIM_TRADING_APPROVAL_REQUIRED` 配置项，开启后 schedule 模式的模拟交易需用户手动审批
+- [新功能] 待审批交易管理 API：GET/POST/DELETE 端点，支持列出/批准/拒绝/删除待审批交易
+- [新功能] 模拟交易配置 API：GET/PUT 端点，支持查询和切换审批开关（持久化到 .env）
+- [新功能] 前端持仓页面新增交易编辑弹窗、待审批交易区块、审批开关 Toggle
 
 ## [3.13.0] - 2026-04-21
 

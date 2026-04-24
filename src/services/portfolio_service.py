@@ -64,6 +64,14 @@ class PortfolioOversellError(ValueError):
         )
 
 
+class OversellError(Exception):
+    """编辑交易后出现 oversell 违规时抛出。"""
+
+    def __init__(self, violations: list):
+        self.violations = violations
+        super().__init__(f"Oversell violations detected: {violations}")
+
+
 @dataclass
 class _AvgState:
     quantity: float = 0.0
@@ -301,6 +309,98 @@ class PortfolioService:
     def delete_corporate_action_event(self, action_id: int) -> bool:
         with self.repo.portfolio_write_session() as session:
             return self.repo.delete_corporate_action_in_session(session=session, action_id=action_id)
+
+    def update_trade_event(self, trade_id: int, updates: dict):
+        """更新交易记录并校验 oversell 约束（硬阻断）。
+
+        在同一事务中完成更新和校验，如果 oversell 则回滚。
+
+        Args:
+            trade_id: 交易记录 ID
+            updates: 要更新的字段（仅 quantity/price/fee/tax/note）
+
+        Returns:
+            更新后的 PortfolioTrade
+
+        Raises:
+            OversellError: 编辑后出现 oversell 违规
+            ValueError: trade_id 不存在
+        """
+        from sqlalchemy.orm import make_transient
+
+        from src.storage import PortfolioTrade
+
+        _ALLOWED_FIELDS = {"quantity", "price", "fee", "tax", "note"}
+        filtered = {k: v for k, v in updates.items() if k in _ALLOWED_FIELDS and v is not None}
+
+        with self.repo.portfolio_write_session() as session:
+            trade = session.query(PortfolioTrade).filter_by(id=trade_id).first()
+            if trade is None:
+                raise ValueError(f"Trade {trade_id} not found")
+
+            account_id = trade.account_id
+
+            # 应用更新
+            for field, value in filtered.items():
+                setattr(trade, field, value)
+            session.flush()  # 刷新到数据库但不提交
+
+            # 在同一 session 中进行 oversell 回放检查
+            violations = self._replay_oversell_check_in_session(session, account_id)
+            if violations:
+                session.rollback()
+                raise OversellError(violations)
+
+            # cache 失效标记
+            self.repo._invalidate_account_cache_in_session(
+                session=session,
+                account_id=account_id,
+                from_date=trade.trade_date,
+            )
+
+            session.commit()
+
+            # detach 返回
+            session.refresh(trade)
+            session.expunge(trade)
+            make_transient(trade)
+
+        return trade
+
+    def _replay_oversell_check_in_session(self, session, account_id: int) -> list:
+        """在给定 session 中回放该账户全部交易，检测 oversell 违规。
+
+        Returns:
+            violations 列表，每项为描述字符串。空列表表示无违规。
+        """
+        from src.storage import PortfolioTrade
+
+        trades = (
+            session.query(PortfolioTrade)
+            .filter_by(account_id=account_id)
+            .order_by(PortfolioTrade.trade_date, PortfolioTrade.created_at)
+            .all()
+        )
+
+        _EPS = 1e-6  # 浮点精度容差
+        position_map: Dict[str, float] = {}  # symbol -> 累积持仓
+        violations = []
+
+        for t in trades:
+            sym = t.symbol
+            current = position_map.get(sym, 0.0)
+            if t.side == "buy":
+                position_map[sym] = current + t.quantity
+            elif t.side == "sell":
+                new_qty = current - t.quantity
+                if new_qty < -_EPS:
+                    violations.append(
+                        f"交易 #{t.id}（{t.trade_date} {t.side} {t.symbol} {t.quantity}股）"
+                        f"导致持仓为 {new_qty:.2f}，存在 oversell"
+                    )
+                position_map[sym] = new_qty
+
+        return violations
 
     def list_trade_events(
         self,

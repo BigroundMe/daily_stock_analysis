@@ -1,0 +1,468 @@
+plan_id: portfolio-sim-trading-edit
+objective: "研究持仓/交易流水编辑和模拟交易手动审批开关的现有架构"
+focus_area: "portfolio management + sim trading"
+created_at: "2026-04-24"
+created_by: researcher
+status: completed
+
+tldr: |
+  - 持仓系统已有完整的 CRUD（增删查）+ 快照回放，但**交易流水只有 Create/Delete，没有 Update/Edit API**
+  - 模拟交易是自动执行模式（schedule 触发 → LLM 决策 → 立即写入持仓），**没有任何审批/确认机制**
+  - 前端 PortfolioPage 已有交易流水的列表展示和删除功能，但**没有编辑/修改 UI**
+  - ORM 模型 PortfolioTrade 设计合理（id/account_id/symbol/side/quantity/price/fee/tax/note），可以直接支持 UPDATE
+  - 实现两个功能需要：后端增加 trade UPDATE API + 前端编辑表单 + 新增 pending trade 状态/表 + 审批 API + 审批 UI
+
+research_metadata:
+  methodology: "hybrid retrieval: semantic_search + grep_search, file_search, read_file"
+  scope: "全栈研究：ORM → Repository → Service → API → Frontend（TS types + API client + Page component）+ 模拟交易服务 + 配置"
+  confidence: high
+  coverage: 95
+  decision_blockers: 3
+  research_blockers: 0
+
+files_analyzed:
+  - file: sim_trading_service.py
+    path: src/services/sim_trading_service.py
+    purpose: "模拟交易核心服务：LLM 组合审查 + 交易执行"
+    key_elements:
+      - element: SimTradingService
+        type: class
+        location: "src/services/sim_trading_service.py:54"
+        description: "主服务类，编排 LLM 调用和交易执行"
+      - element: SimTradeAction
+        type: class
+        location: "src/services/sim_trading_service.py:31"
+        description: "LLM 输出的单笔交易动作 dataclass"
+      - element: SimTradingResult
+        type: class
+        location: "src/services/sim_trading_service.py:42"
+        description: "模拟交易执行结果 dataclass"
+      - element: run
+        type: function
+        location: "src/services/sim_trading_service.py:66"
+        description: "主编排方法：前置检查 → 构建上下文 → LLM 审查 → 执行交易"
+      - element: validate_and_execute
+        type: function
+        location: "src/services/sim_trading_service.py:114+"
+        description: "逐笔校验（现金/持仓/上限/A股手数）并执行 record_trade()"
+      - element: _has_executed_today
+        type: function
+        location: "src/services/sim_trading_service.py:85"
+        description: "幂等检查：每日仅执行一次"
+    language: python
+    lines: 400
+
+  - file: storage.py
+    path: src/storage.py
+    purpose: "ORM 模型定义"
+    key_elements:
+      - element: PortfolioAccount
+        type: class
+        location: "src/storage.py:399"
+        description: "账户表：id, owner_id, name, broker, market, base_currency, is_active"
+      - element: PortfolioTrade
+        type: class
+        location: "src/storage.py:419"
+        description: "交易流水表：id, account_id, trade_uid, symbol, market, currency, trade_date, side, quantity, price, fee, tax, note, dedup_hash"
+      - element: PortfolioCashLedger
+        type: class
+        location: "src/storage.py:445+"
+        description: "现金流水表"
+      - element: PortfolioCorporateAction
+        type: class
+        location: "src/storage.py:470+"
+        description: "企业行动表（分红/拆股）"
+      - element: PortfolioPosition
+        type: class
+        location: "src/storage.py:500+"
+        description: "持仓快照缓存表（replay 计算后写入）"
+    language: python
+    lines: 550
+
+  - file: portfolio_repo.py
+    path: src/repositories/portfolio_repo.py
+    purpose: "持仓数据访问层"
+    key_elements:
+      - element: PortfolioRepository
+        type: class
+        location: "src/repositories/portfolio_repo.py:48"
+        description: "DB 访问层，包含 account CRUD + event writes + queries"
+      - element: add_trade_in_session
+        type: function
+        location: "src/repositories/portfolio_repo.py:320+"
+        description: "在事务中添加交易记录"
+      - element: delete_trade_in_session
+        type: function
+        location: "src/repositories/portfolio_repo.py:419"
+        description: "在事务中删除交易记录"
+      - element: query_trades
+        type: function
+        location: "src/repositories/portfolio_repo.py:200+"
+        description: "查询交易记录（分页 + 多条件过滤）"
+      - element: portfolio_write_session
+        type: function
+        location: "src/repositories/portfolio_repo.py:140+"
+        description: "BEGIN IMMEDIATE 写事务上下文管理器（SQLite 写串行化）"
+      - element: _invalidate_account_cache_in_session
+        type: function
+        location: "src/repositories/portfolio_repo.py"
+        description: "写入后使快照缓存失效（关键：编辑交易后需调用）"
+    language: python
+    lines: 500
+
+  - file: portfolio_service.py
+    path: src/services/portfolio_service.py
+    purpose: "持仓业务逻辑层"
+    key_elements:
+      - element: PortfolioService
+        type: class
+        location: "src/services/portfolio_service.py:72"
+        description: "业务逻辑层：account CRUD + event writes + snapshot replay"
+      - element: record_trade
+        type: function
+        location: "src/services/portfolio_service.py:155+"
+        description: "记录交易（含校验：side/quantity/price/identity/oversell）"
+      - element: delete_trade_event
+        type: function
+        location: "src/services/portfolio_service.py:293"
+        description: "删除交易事件"
+      - element: list_trade_events
+        type: function
+        location: "src/services/portfolio_service.py:302+"
+        description: "列出交易事件（分页查询）"
+      - element: get_portfolio_snapshot
+        type: function
+        location: "src/services/portfolio_service.py:430+"
+        description: "回放全部事件生成持仓快照（核心方法）"
+      - element: PortfolioOversellError
+        type: class
+        location: "src/services/portfolio_service.py:50"
+        description: "卖出超仓异常（编辑交易时需考虑）"
+    language: python
+    lines: 800
+
+  - file: portfolio.py (API endpoints)
+    path: api/v1/endpoints/portfolio.py
+    purpose: "FastAPI 端点层"
+    key_elements:
+      - element: create_trade
+        type: function
+        location: "api/v1/endpoints/portfolio.py:190+"
+        description: "POST /trades - 创建交易"
+      - element: list_trades
+        type: function
+        location: "api/v1/endpoints/portfolio.py:220+"
+        description: "GET /trades - 列出交易"
+      - element: delete_trade
+        type: function
+        location: "api/v1/endpoints/portfolio.py:250+"
+        description: "DELETE /trades/{trade_id} - 删除交易"
+      - element: get_snapshot
+        type: function
+        location: "api/v1/endpoints/portfolio.py:450+"
+        description: "GET /snapshot - 获取持仓快照"
+      - element: get_enriched_snapshot
+        type: function
+        location: "api/v1/endpoints/portfolio.py:560+"
+        description: "GET /snapshot/enriched - 带分析评分的增强快照"
+      - element: get_trade_suggestions
+        type: function
+        location: "api/v1/endpoints/portfolio.py:590+"
+        description: "GET /trade-suggestions - 基于分析的交易建议"
+    language: python
+    lines: 600
+
+  - file: portfolio.py (API schemas)
+    path: api/v1/schemas/portfolio.py
+    purpose: "Pydantic request/response schemas"
+    key_elements:
+      - element: PortfolioTradeCreateRequest
+        type: class
+        location: "api/v1/schemas/portfolio.py:52+"
+        description: "创建交易请求 schema（无 UpdateRequest）"
+      - element: PortfolioTradeListItem
+        type: class
+        location: "api/v1/schemas/portfolio.py:97+"
+        description: "交易列表项 schema"
+      - element: PortfolioTradeListResponse
+        type: class
+        location: "api/v1/schemas/portfolio.py:107+"
+        description: "交易列表分页响应"
+    language: python
+    lines: 250
+
+  - file: PortfolioPage.tsx
+    path: apps/dsa-web/src/pages/PortfolioPage.tsx
+    purpose: "持仓分析前端页面"
+    key_elements:
+      - element: PortfolioPage
+        type: function
+        location: "apps/dsa-web/src/pages/PortfolioPage.tsx:130+"
+        description: "React FC 主组件，包含账户管理、快照、事件列表、CSV 导入、风险分析"
+      - element: PendingDelete
+        type: type
+        location: "apps/dsa-web/src/pages/PortfolioPage.tsx:44+"
+        description: "删除确认 union type（trade/cash/corporate）"
+    language: typescript
+    lines: 2000+
+
+  - file: portfolio.ts (API client)
+    path: apps/dsa-web/src/api/portfolio.ts
+    purpose: "前端 API 调用层"
+    key_elements:
+      - element: portfolioApi.createTrade
+        type: function
+        location: "apps/dsa-web/src/api/portfolio.ts:155+"
+        description: "POST 创建交易"
+      - element: portfolioApi.deleteTrade
+        type: function
+        location: "apps/dsa-web/src/api/portfolio.ts:170+"
+        description: "DELETE 删除交易"
+      - element: portfolioApi.listTrades
+        type: function
+        location: "apps/dsa-web/src/api/portfolio.ts:205+"
+        description: "GET 列出交易"
+    language: typescript
+    lines: 300
+
+  - file: portfolio.ts (types)
+    path: apps/dsa-web/src/types/portfolio.ts
+    purpose: "前端 TypeScript 类型定义"
+    key_elements:
+      - element: PortfolioTradeCreateRequest
+        type: type
+        location: "apps/dsa-web/src/types/portfolio.ts:146+"
+        description: "创建交易请求类型（无 UpdateRequest）"
+      - element: PortfolioTradeListItem
+        type: type
+        location: "apps/dsa-web/src/types/portfolio.ts:193+"
+        description: "交易列表项类型"
+    language: typescript
+    lines: 260
+
+  - file: config.py
+    path: src/config.py
+    purpose: "全局配置"
+    key_elements:
+      - element: sim_trading_enabled
+        type: variable
+        location: "src/config.py:654"
+        description: "bool, 默认 False"
+      - element: sim_trading_account_id
+        type: variable
+        location: "src/config.py:655"
+        description: "Optional[int], 必须配置"
+      - element: sim_trading_max_single_amount
+        type: variable
+        location: "src/config.py:656"
+        description: "float, 默认 100000.0"
+      - element: sim_trading_default_commission
+        type: variable
+        location: "src/config.py:657"
+        description: "float, 默认 5.0"
+      - element: sim_trading_model
+        type: variable
+        location: "src/config.py:658"
+        description: "str, 模拟交易专用 LLM 模型"
+      - element: sim_trading_fallback_models
+        type: variable
+        location: "src/config.py:659"
+        description: "List[str], fallback 模型列表"
+    language: python
+    lines: 1400
+
+  - file: main.py
+    path: main.py
+    purpose: "CLI 主入口"
+    key_elements:
+      - element: "sim trading block"
+        type: pattern
+        location: "main.py:595-615"
+        description: "在 --schedule 模式下、分析完成后自动触发模拟交易"
+    language: python
+    lines: 650
+
+  - file: sim-trading.md
+    path: docs/sim-trading.md
+    purpose: "模拟交易设计文档"
+    key_elements:
+      - element: 数据流
+        type: pattern
+        location: "docs/sim-trading.md"
+        description: "完整数据流：分析结果 → 持仓快照 → LLM prompt → 交易决策 → 校验 → 执行"
+    language: markdown
+    lines: 60
+
+patterns_found:
+  - category: architecture
+    pattern: "Event Sourcing with Snapshot Replay"
+    description: "持仓系统采用事件溯源模式：所有交易/现金/企业行动作为事件存储，通过 replay 计算当前持仓快照"
+    examples:
+      - file: src/services/portfolio_service.py
+        location: "get_portfolio_snapshot()"
+        snippet: "回放全部事件（trades + cash_ledger + corporate_actions）生成持仓快照"
+    prevalence: common
+
+  - category: architecture
+    pattern: "Write Serialization via SQLite BEGIN IMMEDIATE"
+    description: "所有持仓写操作通过 portfolio_write_session() 上下文管理器使用 BEGIN IMMEDIATE 保证串行化"
+    examples:
+      - file: src/repositories/portfolio_repo.py
+        location: "portfolio_write_session()"
+        snippet: "session.connection().exec_driver_sql('BEGIN IMMEDIATE')"
+    prevalence: common
+
+  - category: architecture
+    pattern: "Cache Invalidation on Write"
+    description: "每次写入事件后调用 _invalidate_account_cache_in_session() 清除快照缓存"
+    examples:
+      - file: src/repositories/portfolio_repo.py
+        location: "add_trade_in_session()"
+        snippet: "self._invalidate_account_cache_in_session(session=session, account_id=account_id, from_date=trade_date)"
+    prevalence: common
+
+  - category: architecture
+    pattern: "Sim Trading as Post-Analysis Hook"
+    description: "模拟交易不在 pipeline 中，而是在 main.py schedule 模式分析完成后作为 hook 执行"
+    examples:
+      - file: main.py
+        location: "main.py:595"
+        snippet: "if getattr(config, 'sim_trading_enabled', False): ... sim_service.run(results, is_scheduled=True)"
+    prevalence: rare
+
+  - category: error_handling
+    pattern: "Conflict Detection with Custom Exceptions"
+    description: "交易写入冲突通过自定义异常处理：DuplicateTradeUidError, PortfolioOversellError, PortfolioBusyError"
+    examples:
+      - file: api/v1/endpoints/portfolio.py
+        location: "create_trade()"
+        snippet: "except PortfolioOversellError as exc: raise _conflict_error(error='portfolio_oversell', message=str(exc))"
+    prevalence: common
+
+  - category: naming
+    pattern: "snake_case API → camelCase Frontend"
+    description: "后端使用 snake_case，前端通过 toCamelCase() 工具函数自动转换"
+    examples:
+      - file: apps/dsa-web/src/api/portfolio.ts
+        location: "portfolioApi.getSnapshot()"
+        snippet: "return toCamelCase<PortfolioSnapshotResponse>(response.data)"
+    prevalence: common
+
+related_architecture:
+  components_relevant_to_domain:
+    - component: SimTradingService
+      responsibility: "LLM 组合审查 + 模拟交易执行"
+      location: src/services/sim_trading_service.py
+      relationship_to_domain: "核心修改目标：需要增加审批机制"
+    - component: PortfolioService
+      responsibility: "持仓 CRUD + 快照回放"
+      location: src/services/portfolio_service.py
+      relationship_to_domain: "核心修改目标：需要增加 update_trade 方法"
+    - component: PortfolioRepository
+      responsibility: "数据访问层"
+      location: src/repositories/portfolio_repo.py
+      relationship_to_domain: "需要增加 update_trade_in_session 方法"
+    - component: Portfolio API
+      responsibility: "REST API 端点"
+      location: api/v1/endpoints/portfolio.py
+      relationship_to_domain: "需要增加 PUT /trades/{trade_id} 端点"
+    - component: PortfolioPage
+      responsibility: "前端持仓页面"
+      location: apps/dsa-web/src/pages/PortfolioPage.tsx
+      relationship_to_domain: "需要增加交易编辑 UI 和审批 UI"
+
+  data_flow_involving_domain: |
+    创建交易：Frontend → POST /trades → PortfolioService.record_trade() → PortfolioRepository.add_trade_in_session() → DB
+    删除交易：Frontend → DELETE /trades/{id} → PortfolioService.delete_trade_event() → PortfolioRepository.delete_trade_in_session() → DB
+    模拟交易：main.py schedule → SimTradingService.run() → LLM → validate_and_execute() → PortfolioService.record_trade() → DB
+    快照查询：Frontend → GET /snapshot → PortfolioService.get_portfolio_snapshot() → replay all events → DB
+
+  key_relationships_to_domain:
+    - from: SimTradingService
+      to: PortfolioService
+      relationship: "calls record_trade() 和 get_portfolio_snapshot()"
+    - from: PortfolioService
+      to: PortfolioRepository
+      relationship: "委托 DB 操作"
+    - from: "api/v1/endpoints/portfolio.py"
+      to: PortfolioService
+      relationship: "API 层调用 service 层"
+    - from: "apps/dsa-web/src/api/portfolio.ts"
+      to: "api/v1/endpoints/portfolio.py"
+      relationship: "前端 axios HTTP 调用"
+
+related_conventions:
+  naming_patterns_in_domain: "后端 snake_case，前端 camelCase，ORM 表名 portfolio_*"
+  error_handling_in_domain: "自定义异常 → HTTPException 409/400/404/500 映射"
+  testing_in_domain: "tests/ 下有 portfolio 相关测试文件"
+
+related_dependencies:
+  internal:
+    - component: src/config.py
+      relationship_to_domain: "提供 sim_trading_* 配置项"
+      direction: inbound
+    - component: data_provider/base.py
+      relationship_to_domain: "提供 canonical_stock_code() 股票代码标准化"
+      direction: inbound
+    - component: src/storage.py
+      relationship_to_domain: "提供 ORM 模型定义"
+      direction: inbound
+  external:
+    - name: litellm
+      purpose_for_domain: "模拟交易 LLM 调用"
+    - name: json_repair
+      purpose_for_domain: "修复 LLM 输出的 JSON"
+    - name: sqlalchemy
+      purpose_for_domain: "ORM 和数据库操作"
+
+open_questions:
+  - question: "交易流水编辑时，如果修改了历史交易的数量/价格，是否需要重新校验后续所有交易的 oversell 约束？"
+    context: "当前 record_trade 在写入前校验 sell quantity <= available position；如果修改了历史 buy 数量，后续 sell 可能变成 oversell"
+    type: decision_blocker
+    affects: ["trade-edit-api", "trade-edit-validation"]
+
+  - question: "模拟交易审批开关的 scope：是仅影响 schedule 自动触发的模拟交易，还是也影响通过 API 手动触发的？"
+    context: "当前模拟交易仅在 main.py --schedule 模式触发；但未来可能会有 API 触发"
+    type: decision_blocker
+    affects: ["sim-trading-approval-scope"]
+
+  - question: "审批后的交易执行时机：是在审批时使用 LLM 当时给出的价格，还是使用审批时的实时价格？"
+    context: "LLM 给出的 price 是分析时的价格参考；如果隔天审批，价格可能已变"
+    type: decision_blocker
+    affects: ["sim-trading-approval-execution"]
+
+  - question: "pending trade 数据需要持久化到 DB 还是使用内存/缓存？"
+    context: "如果服务重启，内存中的 pending trade 会丢失；但如果用 DB，需要新增表"
+    type: research
+    affects: ["sim-trading-approval-storage"]
+
+gaps:
+  - area: "交易流水 UPDATE API"
+    description: "后端 Repository/Service/API 层均没有 update_trade 方法。需要新增：Repository.update_trade_in_session() → Service.update_trade_event() → PUT /trades/{trade_id} 端点 + Schema"
+    impact: decision_blocker
+    affects: ["trade-edit-backend"]
+
+  - area: "交易编辑前端 UI"
+    description: "PortfolioPage 有删除确认 ConfirmDialog，但没有编辑表单。需要新增编辑模式（可能复用 trade 创建表单的字段，预填当前值）"
+    impact: decision_blocker
+    affects: ["trade-edit-frontend"]
+
+  - area: "前端 updateTrade API 方法"
+    description: "apps/dsa-web/src/api/portfolio.ts 没有 updateTrade 方法，需要新增 PUT 调用"
+    impact: decision_blocker
+    affects: ["trade-edit-frontend-api"]
+
+  - area: "前端 PortfolioTradeUpdateRequest 类型"
+    description: "apps/dsa-web/src/types/portfolio.ts 没有 update request 类型"
+    impact: decision_blocker
+    affects: ["trade-edit-frontend-types"]
+
+  - area: "模拟交易审批机制"
+    description: "完全不存在。需要新增：配置项 SIM_TRADING_APPROVAL_REQUIRED → pending trade 存储 → 审批 API（approve/reject）→ 审批触发执行 → 前端审批 UI"
+    impact: decision_blocker
+    affects: ["sim-trading-approval"]
+
+  - area: "Pending Trade 数据模型"
+    description: "需要决定：新增 DB 表（如 portfolio_pending_trades）还是复用 PortfolioTrade 加 status 字段"
+    impact: research_blocker
+    affects: ["sim-trading-approval-storage"]

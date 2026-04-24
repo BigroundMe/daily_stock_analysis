@@ -624,6 +624,35 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class PendingSimTrade(Base):
+    """待审批的模拟交易记录。
+
+    当 SIM_TRADING_APPROVAL_REQUIRED=true 时，schedule 模式产出的
+    LLM 交易决策不直接执行，而是暂存于此表等待用户审批。
+    """
+
+    __tablename__ = "pending_sim_trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("portfolio_accounts.id"), nullable=False, index=True)
+    symbol = Column(String(16), nullable=False, index=True)
+    side = Column(String(8), nullable=False)  # buy / sell
+    quantity = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    fee = Column(Float, default=0.0)
+    tax = Column(Float, default=0.0)
+    note = Column(Text, default="")
+    llm_reasoning = Column(Text, default="")
+    status = Column(String(16), default="pending", index=True)  # pending / approved / rejected
+    created_at = Column(DateTime, default=func.now())
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewer_note = Column(Text, default="")
+
+    __table_args__ = (
+        Index("ix_pending_sim_trade_account_status", "account_id", "status"),
+    )
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式

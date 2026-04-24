@@ -374,3 +374,60 @@ export interface TradeSuggestionResponse {
   costMethod: string;
   suggestions: TradeSuggestionItem[];
 }
+
+// ── 交易编辑 ──
+
+export interface TradeUpdateRequest {
+  quantity?: number;
+  price?: number;
+  fee?: number;
+  tax?: number;
+  note?: string;
+}
+
+export interface TradeUpdateResponse {
+  trade: PortfolioTradeListItem;
+  oversellViolations: string[];
+}
+
+// ── 模拟交易审批 ──
+
+export interface PendingSimTrade {
+  id: number;
+  accountId: number;
+  symbol: string;
+  side: PortfolioSide;
+  quantity: number;
+  price: number;
+  fee: number;
+  tax: number;
+  note?: string | null;
+  llmReasoning?: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt?: string | null;
+  reviewedAt?: string | null;
+  reviewerNote?: string | null;
+}
+
+export interface PendingSimTradeListResponse {
+  items: PendingSimTrade[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PendingSimTradeReviewRequest {
+  reviewerNote?: string;
+}
+
+// ── 模拟交易配置 ──
+
+export interface SimTradingConfig {
+  approvalRequired: boolean;
+  simTradingEnabled: boolean;
+  simTradingAccountId?: number | null;
+}
+
+export interface SimTradingConfigUpdateRequest {
+  approvalRequired: boolean;
+}

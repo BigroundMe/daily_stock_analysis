@@ -182,6 +182,21 @@ class PortfolioAccountSnapshot(BaseModel):
     positions: List[PortfolioPositionItem] = Field(default_factory=list)
 
 
+class PortfolioTradeUpdateRequest(BaseModel):
+    """交易编辑请求。仅允许修改以下字段。"""
+    quantity: Optional[float] = Field(None, gt=0, description="数量")
+    price: Optional[float] = Field(None, gt=0, description="价格")
+    fee: Optional[float] = Field(None, ge=0, description="手续费")
+    tax: Optional[float] = Field(None, ge=0, description="税费")
+    note: Optional[str] = Field(None, max_length=255, description="备注")
+
+
+class PortfolioTradeUpdateResponse(BaseModel):
+    """交易编辑响应。"""
+    trade: PortfolioTradeListItem
+    oversell_violations: List[str] = Field(default_factory=list, description="Oversell 违规详情")
+
+
 class PortfolioSnapshotResponse(BaseModel):
     as_of: str
     cost_method: str
@@ -348,3 +363,49 @@ class TradeSuggestionResponse(BaseModel):
     as_of: str
     cost_method: str
     suggestions: List[TradeSuggestionItem] = Field(default_factory=list)
+
+
+# ─── PendingSimTrade Schema ─────────────────
+
+
+class PendingSimTradeItem(BaseModel):
+    """待审批交易列表项。"""
+
+    id: int
+    account_id: int
+    symbol: str
+    side: str
+    quantity: float
+    price: float
+    fee: float = 0.0
+    tax: float = 0.0
+    note: Optional[str] = None
+    llm_reasoning: Optional[str] = None
+    status: str
+    created_at: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    reviewer_note: Optional[str] = None
+
+
+class PendingSimTradeListResponse(BaseModel):
+    items: List[PendingSimTradeItem] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int
+
+
+class PendingSimTradeReviewRequest(BaseModel):
+    reviewer_note: Optional[str] = Field(None, max_length=500)
+
+
+# ─── SimTrading Config Schema ─────────────
+
+
+class SimTradingConfigResponse(BaseModel):
+    approval_required: bool
+    sim_trading_enabled: bool
+    sim_trading_account_id: Optional[int] = None
+
+
+class SimTradingConfigUpdateRequest(BaseModel):
+    approval_required: bool

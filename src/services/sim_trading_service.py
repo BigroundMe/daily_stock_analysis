@@ -64,6 +64,10 @@ class SimTradingService:
 
             self.portfolio_service = PortfolioService()
 
+        # PendingSimTrade CRUD 使用 portfolio_service 的 repo
+        from src.repositories.portfolio_repo import PortfolioRepository
+        self.repo: PortfolioRepository = self.portfolio_service.repo
+
     def run(self, analysis_results: List[Any], *, is_scheduled: bool = False) -> Dict[str, Any]:
         """主编排方法：收集结果 → 构建上下文 → LLM 审查 → 执行交易"""
         # 0. 前置检查
@@ -109,6 +113,26 @@ class SimTradingService:
         if not actions:
             logger.info("LLM 未给出交易建议（可能判断当前不适合交易）")
             return {"status": "no_actions", "llm_response": response_text[:500]}
+
+        # 5.5 审批分支：仅 schedule 模式 + 审批开关开启时进入
+        if self.check_approval_required() and is_scheduled:
+            pending_actions = [
+                {
+                    "symbol": a.stock_code,
+                    "side": a.action,
+                    "quantity": a.quantity,
+                    "price": a.price,
+                    "reason": a.reason,
+                }
+                for a in actions
+            ]
+            pending_ids = self.save_pending_trades(pending_actions, account_id)
+            logger.info("审批模式：%d 笔交易已保存至待审批队列", len(pending_ids))
+            return {
+                "status": "pending_approval",
+                "pending_count": len(pending_ids),
+                "pending_ids": pending_ids,
+            }
 
         # 6. 校验并执行
         logger.info("开始执行 %d 笔模拟交易...", len(actions))
@@ -705,8 +729,71 @@ class SimTradingService:
         """判断是否为 A 股代码（6 位纯数字）"""
         return len(stock_code) == 6 and stock_code.isdigit()
 
+    def check_approval_required(self) -> bool:
+        """检查是否需要审批。"""
+        return self.config.sim_trading_approval_required
+
+    def save_pending_trades(self, actions: list, account_id: int) -> list:
+        """将 LLM 交易决策保存到待审批队列。返回 pending_id 列表。"""
+        pending_ids = []
+        for action in actions:
+            pid = self.repo.add_pending_sim_trade(
+                account_id=account_id,
+                symbol=action.get("symbol", ""),
+                side=action.get("side", ""),
+                quantity=action.get("quantity", 0),
+                price=action.get("price", 0),
+                fee=self.config.sim_trading_default_commission,
+                tax=0.0,
+                note=f"[sim-trading] {action.get('symbol', '')}",
+                llm_reasoning=action.get("reason", ""),
+            )
+            pending_ids.append(pid)
+        return pending_ids
+
+    def execute_pending_trade(self, pending_id: int, reviewer_note: str = "") -> dict:
+        """审批通过后执行待审批交易。
+
+        关键行为：
+        - trade_date 使用 PendingSimTrade.created_at 的日期部分
+        - 通过 portfolio_service.record_trade 执行交易（含 oversell 校验）
+        - record_trade 成功后更新 pending 状态为 approved
+        """
+        pending = self.repo.get_pending_sim_trade(pending_id)
+        if pending is None:
+            return {"success": False, "message": f"Pending trade {pending_id} not found"}
+        if pending.status != "pending":
+            return {"success": False, "message": f"Trade already {pending.status}"}
+
+        # 使用 created_at 日期
+        trade_date = pending.created_at.date() if pending.created_at else date.today()
+
+        try:
+            # 通过 portfolio_service.record_trade 执行（含完整校验）
+            result = self.portfolio_service.record_trade(
+                account_id=pending.account_id,
+                symbol=pending.symbol,
+                trade_date=trade_date,
+                side=pending.side,
+                quantity=float(pending.quantity),
+                price=float(pending.price),
+                fee=float(pending.fee or 0),
+                tax=float(pending.tax or 0),
+                note=pending.note or f"[sim-trading] {pending.symbol}",
+            )
+
+            # record_trade 成功后更新 pending 状态
+            self.repo.update_pending_sim_trade_status(
+                pending_id, "approved", reviewer_note
+            )
+
+            return {"success": True, "trade_id": result.get("id")}
+        except Exception as e:
+            logger.error("执行审批交易失败: %s", e)
+            return {"success": False, "message": str(e)}
+
     def _has_executed_today(self, account_id: int) -> bool:
-        """检查今日是否已执行过模拟交易（幂等检查）"""
+        """检查今日是否已执行过模拟交易（含 pending 记录的幂等检查）"""
         try:
             today = date.today()
             trades, _ = self.portfolio_service.repo.query_trades(
@@ -718,9 +805,18 @@ class SimTradingService:
                 page=1,
                 page_size=1000,
             )
-            return any(
+            has_executed = any(
                 (t.note or "").startswith("[sim-trading]") for t in trades
             )
+            if has_executed:
+                return True
+
+            # 审批模式下，也检查 pending 表
+            if self.check_approval_required():
+                if self.repo.has_pending_or_approved_today(account_id):
+                    return True
+
+            return False
         except Exception:
             logger.error("幂等检查查询失败，account_id=%s，安全跳过本次执行", account_id, exc_info=True)
             return True
