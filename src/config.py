@@ -654,7 +654,7 @@ class Config:
     sim_trading_enabled: bool = False
     sim_trading_account_id: Optional[int] = None
     sim_trading_max_single_amount: float = 100000.0
-    sim_trading_default_commission: float = 5.0
+    sim_trading_default_commission: float = 0.0
     sim_trading_model: str = ""  # 模拟交易专用 LLM 模型，为空时回退到 litellm_model
     sim_trading_fallback_models: List[str] = field(default_factory=list)  # 模拟交易 fallback 模型列表
     sim_trading_approval_required: bool = False  # 模拟交易审批开关（仅影响 schedule 模式）
@@ -1342,7 +1342,7 @@ class Config:
                 field_name='SIM_TRADING_MAX_SINGLE_AMOUNT', minimum=0.0,
             ),
             sim_trading_default_commission=parse_env_float(
-                os.getenv('SIM_TRADING_DEFAULT_COMMISSION'), 5.0,
+                os.getenv('SIM_TRADING_DEFAULT_COMMISSION'), 0.0,
                 field_name='SIM_TRADING_DEFAULT_COMMISSION', minimum=0.0,
             ),
             sim_trading_model=os.getenv('SIM_TRADING_MODEL', '').strip(),

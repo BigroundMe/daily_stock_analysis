@@ -1,0 +1,209 @@
+plan_id: avg_cost_investigation
+objective: 调查模拟仓持仓均价 0.932 与交易价格 0.927 不一致的根因
+focus_area: avg_cost_fee_calculation
+created_at: "2026-04-27"
+created_by: researcher
+status: completed
+
+tldr: |
+  - 持仓均价计算公式为 avg_cost = (gross + fee + tax) / quantity，其中 fee/tax 被计入成本
+  - 模拟交易服务 SimTradingService 在执行交易时使用 config.sim_trading_default_commission 作为 fee，默认值为 5.0 元
+  - 买入 1000 股 × 0.927 = 927.0 元，加上 fee=5.0 元，total_cost=932.0 元，avg_cost=932.0/1000=0.932，完全吻合
+  - 根因：佣金（commission=5.0）被计入持仓成本，这是设计行为，非 bug
+  - 差值 0.005 = 5.0 / 1000 = commission / quantity
+
+research_metadata:
+  methodology: "hybrid retrieval: semantic_search + grep_search, targeted file reads"
+  scope: "sim_trading_service → portfolio_service → config 三层调用链"
+  confidence: high
+  coverage: 95
+  decision_blockers: 0
+  research_blockers: 0
+
+files_analyzed:
+  - file: sim_trading_service.py
+    path: src/services/sim_trading_service.py
+    purpose: 模拟交易执行服务，负责 LLM 决策解析和交易执行
+    key_elements:
+      - element: validate_and_execute
+        type: function
+        location: "src/services/sim_trading_service.py:551"
+        description: 校验并执行交易动作的主方法
+      - element: commission = self.config.sim_trading_default_commission
+        type: variable
+        location: "src/services/sim_trading_service.py:682"
+        description: 从配置读取默认佣金，传给 portfolio_service.record_trade 的 fee 参数
+      - element: "fee=commission"
+        type: pattern
+        location: "src/services/sim_trading_service.py:690"
+        description: 将 commission 作为 fee 传入 record_trade
+      - element: save_pending_trades
+        type: function
+        location: "src/services/sim_trading_service.py:736"
+        description: 保存待审批交易时同样使用 sim_trading_default_commission 作为 fee
+    language: python
+    lines: 820
+
+  - file: portfolio_service.py
+    path: src/services/portfolio_service.py
+    purpose: 组合服务层，负责交易录入和持仓快照重放
+    key_elements:
+      - element: record_trade
+        type: function
+        location: "src/services/portfolio_service.py:158"
+        description: 交易录入方法，接受 fee 和 tax 参数
+      - element: "_replay_account"
+        type: function
+        location: "src/services/portfolio_service.py:1088"
+        description: 重放账户所有事件，计算持仓快照
+      - element: "state.total_cost += (gross + fee + tax)"
+        type: pattern
+        location: "src/services/portfolio_service.py:1158"
+        description: "【根因代码行】avg 模式下，买入时将 fee+tax 加入 total_cost"
+      - element: "unit_cost = (gross + fee + tax) / qty"
+        type: pattern
+        location: "src/services/portfolio_service.py:1144"
+        description: "FIFO 模式下，单笔 lot 的 unit_cost 同样包含 fee+tax"
+      - element: "avg_cost = total_cost / qty"
+        type: pattern
+        location: "src/services/portfolio_service.py:1337"
+        description: "_build_positions 中计算 avg_cost"
+      - element: _AvgState
+        type: class
+        location: "src/services/portfolio_service.py:76"
+        description: "avg 模式下的累计状态：quantity + total_cost"
+    language: python
+    lines: 1470
+
+  - file: config.py
+    path: src/config.py
+    purpose: 全局配置 dataclass，从 .env 加载
+    key_elements:
+      - element: sim_trading_default_commission
+        type: variable
+        location: "src/config.py:657"
+        description: "默认佣金，类型 float，默认值 5.0 元"
+      - element: "parse_env_float(os.getenv('SIM_TRADING_DEFAULT_COMMISSION'), 5.0, ...)"
+        type: pattern
+        location: "src/config.py:1344-1346"
+        description: "从环境变量 SIM_TRADING_DEFAULT_COMMISSION 读取，fallback 5.0"
+    language: python
+    lines: 1400
+
+  - file: storage.py
+    path: src/storage.py
+    purpose: ORM 模型定义
+    key_elements:
+      - element: PortfolioPosition.avg_cost
+        type: variable
+        location: "src/storage.py:500"
+        description: "持仓表的 avg_cost 列，Float 类型"
+    language: python
+    lines: 900
+
+  - file: portfolio.py (schema)
+    path: api/v1/schemas/portfolio.py
+    purpose: API 请求/响应 Schema
+    key_elements:
+      - element: "fee: float = Field(0.0, ge=0)"
+        type: variable
+        location: "api/v1/schemas/portfolio.py:52"
+        description: "手动录入交易时 fee 默认为 0.0"
+    language: python
+    lines: 400
+
+patterns_found:
+  - category: architecture
+    pattern: "fee/tax 计入持仓成本"
+    description: |
+      无论 FIFO 还是 AVG 模式，买入时 total_cost 都包含 fee+tax：
+      - FIFO: unit_cost = (gross + fee + tax) / qty
+      - AVG:  state.total_cost += (gross + fee + tax)
+      这意味着 avg_cost 不是纯买入均价，而是含费均价（全成本均价）。
+    examples:
+      - file: src/services/portfolio_service.py
+        location: "line 1144"
+        snippet: "unit_cost = (gross + fee + tax) / qty"
+      - file: src/services/portfolio_service.py
+        location: "line 1158"
+        snippet: "state.total_cost += (gross + fee + tax)"
+    prevalence: common
+
+  - category: architecture
+    pattern: "模拟交易固定佣金"
+    description: |
+      SimTradingService 使用 config.sim_trading_default_commission（默认 5.0 元）
+      作为每笔交易的 fee，tax 固定为 0.0。
+      该佣金为固定金额（非按比例），不随交易金额或数量变化。
+    examples:
+      - file: src/services/sim_trading_service.py
+        location: "line 682"
+        snippet: "commission = self.config.sim_trading_default_commission"
+      - file: src/services/sim_trading_service.py
+        location: "line 690"
+        snippet: "fee=commission,"
+    prevalence: common
+
+  - category: architecture
+    pattern: "手动录入 vs 模拟交易的 fee 差异"
+    description: |
+      - 通过 API 手动录入交易：fee 默认 0.0（用户可自定义传入）
+      - 通过模拟交易执行：fee 固定为 sim_trading_default_commission（默认 5.0）
+      这两种路径导致同一个 record_trade 方法在不同入口有不同的 fee 值。
+    examples:
+      - file: api/v1/schemas/portfolio.py
+        location: "line 52"
+        snippet: "fee: float = Field(0.0, ge=0)"
+      - file: src/config.py
+        location: "line 657"
+        snippet: "sim_trading_default_commission: float = 5.0"
+    prevalence: common
+
+related_architecture:
+  components_relevant_to_domain:
+    - component: SimTradingService
+      responsibility: LLM 决策 → 执行模拟交易
+      location: src/services/sim_trading_service.py
+      relationship_to_domain: "调用 portfolio_service.record_trade 并传入 fee=commission"
+    - component: PortfolioService._replay_account
+      responsibility: 重放所有事件计算持仓快照
+      location: src/services/portfolio_service.py:1088
+      relationship_to_domain: "核心计算逻辑：将 fee+tax 计入 total_cost"
+    - component: PortfolioService._build_positions
+      responsibility: 从 avg_state/fifo_lots 构建持仓行
+      location: src/services/portfolio_service.py:1310
+      relationship_to_domain: "计算 avg_cost = total_cost / qty"
+    - component: Config.sim_trading_default_commission
+      responsibility: 提供默认佣金值
+      location: src/config.py:657
+      relationship_to_domain: "决定 fee 的数值"
+
+  data_flow_involving_domain: |
+    SimTradingService.validate_and_execute()
+      → commission = config.sim_trading_default_commission (5.0)
+      → PortfolioService.record_trade(fee=5.0, tax=0.0)
+        → repo.add_trade_in_session(fee=5.0, tax=0.0)  # 写入 DB
+    PortfolioService.snapshot()
+      → _replay_account()
+        → 读取 trade.fee=5.0, trade.tax=0.0
+        → gross = 1000 * 0.927 = 927.0
+        → state.total_cost += (927.0 + 5.0 + 0.0) = 932.0
+        → state.quantity += 1000
+      → _build_positions()
+        → avg_cost = 932.0 / 1000 = 0.932
+
+open_questions:
+  - question: "用户是否期望 avg_cost 显示纯买入均价（不含费用），还是含费全成本均价？"
+    context: "当前设计是含费全成本均价，这是常见券商做法，但可能与用户预期不符"
+    type: nice_to_know
+    affects: []
+  - question: "sim_trading_default_commission=5.0 是否需要改为按比例计算（如万三）？"
+    context: "当前固定金额佣金对小额交易影响显著（927 元交易收 5 元，费率约 0.54%）"
+    type: nice_to_know
+    affects: []
+
+gaps:
+  - area: "前端展示"
+    description: "未调查前端是否在持仓页面展示了 fee/tax 明细，用户可能无法区分含费均价和纯均价"
+    impact: nice_to_know
+    affects: []

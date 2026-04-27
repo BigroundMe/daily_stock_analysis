@@ -11,7 +11,7 @@
 | `SIM_TRADING_ENABLED` | `false` | 是否启用模拟交易 |
 | `SIM_TRADING_ACCOUNT_ID` | 无 | 使用的持仓账户 ID（必须配置） |
 | `SIM_TRADING_MAX_SINGLE_AMOUNT` | `100000` | 单笔交易最大金额（元） |
-| `SIM_TRADING_DEFAULT_COMMISSION` | `5.0` | 默认交易佣金（元） |
+| `SIM_TRADING_DEFAULT_COMMISSION` | `0.0` | 默认交易佣金（元） |
 | `SIM_TRADING_APPROVAL_REQUIRED` | `false` | 模拟交易审批开关。设为 `true` 时，`--schedule` 模式下的模拟交易不再自动执行，而是进入待审批队列，需要用户在 Web 前端手动批准或拒绝。仅影响 schedule 模式，API/bot 触发不受影响。 |
 
 ## 触发条件
