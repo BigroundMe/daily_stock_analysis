@@ -1028,6 +1028,7 @@ const PortfolioPage: React.FC = () => {
                   <tr>
                     <th className="text-left py-2 pr-2">账户</th>
                     <th className="text-left py-2 pr-2">代码</th>
+                    <th className="text-left py-2 pr-2">名称</th>
                     <th className="text-right py-2 pr-2">数量</th>
                     <th className="text-right py-2 pr-2">均价</th>
                     <th className="text-right py-2 pr-2">现价</th>
@@ -1046,6 +1047,7 @@ const PortfolioPage: React.FC = () => {
                       <tr key={`${row.accountId}-${row.symbol}-${row.market}`} className="border-b border-white/5">
                         <td className="py-2 pr-2 text-secondary">{row.accountName}</td>
                         <td className="py-2 pr-2 font-mono text-foreground">{row.symbol}</td>
+                        <td className="py-2 pr-2 text-secondary">{row.stockName || '—'}</td>
                         <td className="py-2 pr-2 text-right">{row.quantity.toFixed(2)}</td>
                         <td className="py-2 pr-2 text-right">{row.avgCost.toFixed(4)}</td>
                         <td className="py-2 pr-2 text-right">{row.lastPrice.toFixed(4)}</td>

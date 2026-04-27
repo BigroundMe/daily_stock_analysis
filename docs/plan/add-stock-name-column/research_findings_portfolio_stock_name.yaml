@@ -1,0 +1,218 @@
+plan_id: add-stock-name-column
+objective: "在持仓明细表格中新增「股票名称」列"
+focus_area: portfolio-positions-stock-name
+created_at: "2026-04-27"
+created_by: gem-researcher
+status: completed
+
+tldr: |
+  - 前端持仓表格在 PortfolioPage.tsx L1030-L1038 定义 9 列（账户/代码/数量/均价/现价/市值/盈亏/评分/建议），无名称列
+  - 后端 PortfolioPositionItem schema 无 name 字段；AnalysisHistory ORM 有 name 列，且已在 enriched 流程中被查询
+  - 最佳方案：在 get_enriched_snapshot 中从已查到的 AnalysisHistory.name 顺带提取 stock_name，零额外查询
+  - 改动面：后端 schema 2 处 + service 1 处 + 前端 type 1 处 + 页面组件 1 处，约 20 行变更
+
+research_metadata:
+  methodology: "hybrid retrieval: semantic_search + grep_search, read_file for detailed examination"
+  scope: "前端 PortfolioPage 组件 + 后端 portfolio schema/service/endpoint + ORM 模型 + analysis_repo"
+  confidence: high
+  coverage: 95
+  decision_blockers: 0
+  research_blockers: 0
+
+files_analyzed:
+  - file: PortfolioPage.tsx
+    path: apps/dsa-web/src/pages/PortfolioPage.tsx
+    purpose: "持仓页面主组件，渲染持仓表格"
+    key_elements:
+      - element: FlatPosition
+        type: type
+        location: "PortfolioPage.tsx:42"
+        description: "EnrichedPositionItem & { accountId, accountName } —— 表格行数据类型"
+      - element: positionRows
+        type: variable
+        location: "PortfolioPage.tsx:472"
+        description: "useMemo 计算的表格数据，从 snapshot.accounts[].positions[] 展平"
+      - element: 持仓明细表头
+        type: pattern
+        location: "PortfolioPage.tsx:1030-1038"
+        description: "9 列：账户 / 代码 / 数量 / 均价 / 现价 / 市值 / 未实现盈亏 / 评分 / 建议"
+      - element: 表格行渲染
+        type: pattern
+        location: "PortfolioPage.tsx:1041-1077"
+        description: "使用 row.symbol / row.quantity / row.avgCost 等字段渲染，无 name 字段"
+    language: TypeScript/React
+    lines: 1200
+
+  - file: portfolio.ts (types)
+    path: apps/dsa-web/src/types/portfolio.ts
+    purpose: "前端 Portfolio 类型定义"
+    key_elements:
+      - element: PortfolioPositionItem
+        type: interface
+        location: "portfolio.ts:30"
+        description: "字段：symbol, market, currency, quantity, avgCost, totalCost, lastPrice, marketValueBase, unrealizedPnlBase, valuationCurrency —— 无 name 字段"
+      - element: EnrichedPositionItem
+        type: interface
+        location: "portfolio.ts:313"
+        description: "extends PortfolioPositionItem + latestAnalysis? —— 无 name 字段"
+    language: TypeScript
+    lines: 380
+
+  - file: portfolio.py (schemas)
+    path: api/v1/schemas/portfolio.py
+    purpose: "后端 Portfolio Pydantic schema"
+    key_elements:
+      - element: PortfolioPositionItem
+        type: class
+        location: "portfolio.py:152"
+        description: "字段：symbol, market, currency, quantity, avg_cost, total_cost, last_price, market_value_base, unrealized_pnl_base, valuation_currency —— 无 name 字段"
+      - element: EnrichedPositionItem
+        type: class
+        location: "portfolio.py:296"
+        description: "继承 PortfolioPositionItem + latest_analysis —— 无 name 字段"
+      - element: LatestAnalysisBrief
+        type: class
+        location: "portfolio.py:284"
+        description: "分析摘要：sentiment_score, operation_advice, trend_prediction, ideal_buy, stop_loss, take_profit, analyzed_at"
+    language: Python
+    lines: 340
+
+  - file: portfolio_service.py
+    path: src/services/portfolio_service.py
+    purpose: "持仓业务逻辑层"
+    key_elements:
+      - element: get_enriched_snapshot
+        type: function
+        location: "portfolio_service.py:669"
+        description: "获取快照 → 收集 symbols → 查 AnalysisRepository.get_latest_by_codes → 附加 latest_analysis 到每个 position"
+    language: Python
+    lines: 800
+
+  - file: analysis_repo.py
+    path: src/repositories/analysis_repo.py
+    purpose: "分析记录数据访问层"
+    key_elements:
+      - element: get_latest_by_codes
+        type: function
+        location: "analysis_repo.py:132"
+        description: "返回 {code: AnalysisHistory} 字典，AnalysisHistory 对象包含 name 属性"
+    language: Python
+    lines: 175
+
+  - file: storage.py (ORM)
+    path: src/storage.py
+    purpose: "ORM 模型定义"
+    key_elements:
+      - element: AnalysisHistory
+        type: class
+        location: "storage.py:212"
+        description: "analysis_history 表，包含 code(股票代码) + name(股票名称) 字段"
+      - element: PortfolioPosition
+        type: class
+        location: "storage.py:488"
+        description: "portfolio_positions 表，仅有 symbol，无 name 字段"
+    language: Python
+    lines: 1900
+
+patterns_found:
+  - category: architecture
+    pattern: "enriched snapshot 附加模式"
+    description: |
+      get_enriched_snapshot 先调用 get_portfolio_snapshot 获取基础快照，
+      再通过 AnalysisRepository.get_latest_by_codes 批量查询分析记录，
+      遍历 positions 逐个附加 latest_analysis 字典。
+      返回的 AnalysisHistory ORM 对象已包含 name 属性，但当前仅提取了分析评分字段，未提取 name。
+    examples:
+      - file: portfolio_service.py
+        location: "portfolio_service.py:705-719"
+        snippet: |
+          record = latest_map.get(symbol)
+          if record:
+              pos["latest_analysis"] = {
+                  "sentiment_score": getattr(record, "sentiment_score", None),
+                  ...
+              }
+    prevalence: common
+
+  - category: architecture
+    pattern: "AnalysisHistory.name 作为股票名称来源"
+    description: |
+      AnalysisHistory 表的 name 字段在每次分析时由 analyzer 写入，
+      是项目中最普遍的股票名称来源。analysis_history.name 值来自数据抓取阶段。
+    examples:
+      - file: storage.py
+        location: "storage.py:230"
+        snippet: "name = Column(String(50))"
+    prevalence: common
+
+related_architecture:
+  components_relevant_to_domain:
+    - component: PortfolioPage.tsx
+      responsibility: "持仓表格渲染"
+      location: apps/dsa-web/src/pages/PortfolioPage.tsx
+      relationship_to_domain: "直接消费 enriched snapshot 数据并渲染表格"
+    - component: portfolio_service.get_enriched_snapshot
+      responsibility: "组装 enriched 快照（基础持仓 + 分析评分）"
+      location: src/services/portfolio_service.py
+      relationship_to_domain: "数据组装层，是添加 stock_name 的最佳位置"
+    - component: AnalysisRepository.get_latest_by_codes
+      responsibility: "批量查询最近分析记录"
+      location: src/repositories/analysis_repo.py
+      relationship_to_domain: "返回 AnalysisHistory 对象（已含 name），无需额外查询"
+  data_flow_involving_domain: |
+    前端 PortfolioPage → portfolioApi.getEnrichedSnapshot()
+    → GET /api/v1/portfolio/snapshot/enriched
+    → portfolio_service.get_enriched_snapshot()
+      → get_portfolio_snapshot() → 基础 position dict
+      → AnalysisRepository.get_latest_by_codes() → {code: AnalysisHistory}
+      → 附加 latest_analysis 到每个 position
+    → EnrichedSnapshotResponse → 前端 camelCase 转换 → positionRows
+
+related_conventions:
+  naming_patterns_in_domain: "后端 snake_case, 前端 camelCase, API 层自动转换"
+  structure_of_domain: "Schema → Service → Repository 分层"
+
+open_questions: []
+
+gaps:
+  - area: "AnalysisHistory.name 空值情况"
+    description: |
+      如果某只股票从未被分析过（latest_map 中无记录），或分析记录中 name 为空，
+      stock_name 将为 null。前端需要做空值兼容显示（如显示 "—"）。
+    impact: nice_to_know
+    affects: []
+  - area: "非 enriched 路径无 stock_name"
+    description: |
+      基础 /snapshot 端点不走 enriched 流程，不会包含 stock_name。
+      但前端 PortfolioPage 当前使用的是 getEnrichedSnapshot，所以不影响。
+    impact: nice_to_know
+    affects: []
+
+# ── 实现方案建议 ──
+implementation_proposal:
+  summary: "从已查询的 AnalysisHistory.name 提取 stock_name，零额外 DB 查询"
+  
+  backend_changes:
+    - file: api/v1/schemas/portfolio.py
+      change: "在 EnrichedPositionItem 中新增 stock_name: Optional[str] = None"
+      line: 296
+
+    - file: src/services/portfolio_service.py
+      change: |
+        在 get_enriched_snapshot 的 position 遍历中，从 record.name 提取 stock_name：
+        pos["stock_name"] = getattr(record, "name", None) if record else None
+      line: "700-720 区间"
+
+  frontend_changes:
+    - file: apps/dsa-web/src/types/portfolio.ts
+      change: "在 EnrichedPositionItem 接口中新增 stockName?: string | null"
+      line: 313
+
+    - file: apps/dsa-web/src/pages/PortfolioPage.tsx
+      change: |
+        1. 表头：在「代码」和「数量」之间插入 <th>名称</th>（约 L1032）
+        2. 表体：在 row.symbol 行后插入 <td>{row.stockName || '—'}</td>（约 L1052）
+      line: "1030-1055"
+
+  risk: "低风险。stock_name 为 Optional，不影响现有字段；AnalysisHistory 已被查询，无额外性能开销。"
+  rollback: "移除新增字段和列即可恢复。"

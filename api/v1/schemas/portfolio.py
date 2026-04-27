@@ -296,6 +296,7 @@ class LatestAnalysisBrief(BaseModel):
 class EnrichedPositionItem(PortfolioPositionItem):
     """在 PortfolioPositionItem 基础上叠加最近分析数据"""
 
+    stock_name: Optional[str] = Field(None, description="股票名称")
     latest_analysis: Optional[LatestAnalysisBrief] = Field(
         None, description="最近一次分析结果摘要，无分析记录时为 null"
     )

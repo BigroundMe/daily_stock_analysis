@@ -701,6 +701,7 @@ class PortfolioService:
             for pos in acct.get("positions", []):
                 symbol = pos["symbol"]
                 record = latest_map.get(symbol)
+                pos["stock_name"] = getattr(record, "name", None) if record else None
                 if record:
                     pos["latest_analysis"] = {
                         "sentiment_score": getattr(record, "sentiment_score", None),

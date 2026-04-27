@@ -311,6 +311,7 @@ export interface LatestAnalysisBrief {
 }
 
 export interface EnrichedPositionItem extends PortfolioPositionItem {
+  stockName?: string | null;
   latestAnalysis?: LatestAnalysisBrief | null;
 }
 
